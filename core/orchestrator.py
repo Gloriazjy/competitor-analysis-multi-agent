@@ -18,12 +18,13 @@ from models.domain import (
     ProductAnalysis, PricingAnalysis, MarketAnalysis,
     StrategyReport
 )
-from agents.discovery_agent import DiscoveryAgent
-from agents.collection_agent import CollectionAgent
-from agents.product_agent import ProductAgent
-from agents.pricing_agent import PricingAgent
-from agents.market_agent import MarketAgent
-from agents.strategy_agent import StrategyAgent
+from agents.research.discovery_agent import DiscoveryAgent
+from agents.research.collection_agent import CollectionAgent
+from agents.analysis.product_agent import ProductAgent
+from agents.analysis.pricing_agent import PricingAgent
+from agents.analysis.market_agent import MarketAgent
+from agents.reporting.strategy_agent import StrategyAgent
+from agents.reporting.report_formatter import ReportFormatter
 import config
 
 
@@ -64,6 +65,7 @@ class Orchestrator:
         self.pricing_agent = PricingAgent()
         self.market_agent = MarketAgent()
         self.strategy_agent = StrategyAgent()
+        self.report_formatter = ReportFormatter()
 
         self.timings: dict[str, float] = {}
 
@@ -183,7 +185,7 @@ class Orchestrator:
         print(f"{'═' * 65}")
 
         # 打印格式化报告
-        formatted = self.strategy_agent.format_report(report)
+        formatted = self.report_formatter.format_report(report)
         print(formatted)
 
         # 打印功能矩阵

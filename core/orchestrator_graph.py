@@ -19,13 +19,14 @@ from core.type_utils import (
     to_competitor_list, to_competitor_data,
     to_product_analysis, to_pricing_analysis, to_market_analysis
 )
-from agents.discovery_agent import DiscoveryAgent
-from agents.collection_agent import CollectionAgent
-from agents.product_agent import ProductAgent
-from agents.pricing_agent import PricingAgent
-from agents.market_agent import MarketAgent
-from agents.strategy_agent import StrategyAgent
-from agents.quality_check_agent import QualityCheckAgent
+from agents.research.discovery_agent import DiscoveryAgent
+from agents.research.collection_agent import CollectionAgent
+from agents.analysis.product_agent import ProductAgent
+from agents.analysis.pricing_agent import PricingAgent
+from agents.analysis.market_agent import MarketAgent
+from agents.analysis.quality_check_agent import QualityCheckAgent
+from agents.reporting.strategy_agent import StrategyAgent
+from agents.reporting.report_formatter import ReportFormatter
 import config
 
 
@@ -46,6 +47,7 @@ class LangGraphOrchestrator:
         self.pricing_agent = PricingAgent()
         self.market_agent = MarketAgent()
         self.strategy_agent = StrategyAgent()
+        self.report_formatter = ReportFormatter()
         self.quality_check_agent = QualityCheckAgent()
         
         self._app = None

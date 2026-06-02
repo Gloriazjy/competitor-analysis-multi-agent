@@ -1,2 +1,6 @@
-# agents包
-from .base_agent import BaseAgent
+# -*- coding: utf-8 -*-
+"""Agent package."""
+
+from agents.base_agent import BaseAgent
+
+__all__ = ["BaseAgent"]

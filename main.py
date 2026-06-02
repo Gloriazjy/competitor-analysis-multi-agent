@@ -82,7 +82,7 @@ async def run_graph_analysis(product_description: str, use_llm: bool = True, max
     report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
     os.makedirs(report_dir, exist_ok=True)
     
-    html_content = orchestrator.strategy_agent.format_html_report(
+    html_content = orchestrator.report_formatter.format_html_report(
         report,
         product_analysis=final_state.get("product_analysis"),
         pricing_analysis=final_state.get("pricing_analysis"),
