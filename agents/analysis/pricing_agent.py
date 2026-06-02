@@ -11,6 +11,7 @@ LLM调用：1次
 from agents.base_agent import BaseAgent
 from models.domain import CompetitorData, PricingAnalysis, PricingItem
 from core.prompt_loader import load as load_prompts
+from core.scenario_profile import detect_scenario
 import config
 import json
 
@@ -27,18 +28,22 @@ class PricingAgent(BaseAgent):
         self._prompt_analyze = prompts["prompt_analyze"]
 
     async def run(self, product_name: str,
-                  competitors_data: dict[str, CompetitorData]) -> PricingAnalysis:
+                  competitors_data: dict[str, CompetitorData],
+                  quality_feedback: list[dict] = None) -> PricingAnalysis:
         """
         主运行逻辑：全量数据分析定价对比
 
         Args:
             product_name: 用户产品名称
             competitors_data: 竞品采集数据
+            quality_feedback: 质检打回的定价分析问题
 
         Returns:
             PricingAnalysis: 定价分析结果
         """
         self._log("💰 开始定价分析...")
+        if quality_feedback:
+            self._log(f"   收到质检反馈: {len(quality_feedback)}条")
 
         competitors_text = self._build_competitors_text(product_name, competitors_data)
 
@@ -47,6 +52,9 @@ class PricingAgent(BaseAgent):
                 product_name=product_name,
                 competitors_text=competitors_text,
             )
+            feedback_text = self._format_feedback(quality_feedback or [])
+            if feedback_text:
+                prompt += f"\n\n## 质检返工要求\n{feedback_text}\n请补齐定价对比项，并避免无依据的定价判断。"
             result = self.ask_llm_json(prompt, max_tokens=4096)
             if result:
                 analysis = self._parse_pricing_analysis(result)
@@ -91,18 +99,51 @@ class PricingAgent(BaseAgent):
                        competitors_data: dict[str, CompetitorData]) -> PricingAnalysis:
         """规则引擎定价分析"""
         import re
+        scenario_text = product_name + " " + " ".join(
+            f"{data.product_features} {data.pricing_info} {data.market_share} {data.user_reviews}"
+            for data in competitors_data.values()
+        )
+        profile = detect_scenario(scenario_text)
         pricing_comparison = []
         for name, data in competitors_data.items():
+            pricing_text = data.pricing_info or ""
             pricing_comparison.append(PricingItem(
                 competitor=name,
-                free_tier=data.pricing_info[:100] if data.pricing_info else "未知",
-                paid_tier="",
-                pricing_model="",
+                free_tier=self._extract_pricing_hint(pricing_text, ["免费", "free", "试用"]),
+                paid_tier=pricing_text[:120] if pricing_text else "未知",
+                pricing_model=self._infer_pricing_model(pricing_text, profile.pricing_dimensions),
             ))
 
         return PricingAnalysis(
             pricing_comparison=pricing_comparison,
-            pricing_strategy_analysis="(规则引擎分析，详情请启用LLM)",
+            pricing_strategy_analysis=f"按{profile.category}场景关注: {', '.join(profile.pricing_dimensions)}",
             value_ranking=[],
-            summary="基于搜索结果的简单定价信息提取（建议启用LLM获得深度分析）",
+            summary=f"基于{profile.category}场景维度的规则定价信息提取（建议启用LLM获得深度分析）",
         )
+
+    @staticmethod
+    def _extract_pricing_hint(text: str, keywords: list[str]) -> str:
+        if not text:
+            return "未知"
+        lowered = text.lower()
+        return "有免费/试用线索" if any(keyword.lower() in lowered for keyword in keywords) else "未发现免费线索"
+
+    @staticmethod
+    def _infer_pricing_model(text: str, dimensions: tuple[str, ...]) -> str:
+        lowered = (text or "").lower()
+        if "订阅" in lowered or "subscription" in lowered:
+            return "订阅制"
+        if "按量" in lowered or "用量" in lowered:
+            return "按量计费"
+        if "买断" in lowered or "硬件" in lowered:
+            return "一次性购买/硬件售价"
+        return "需核实：" + "、".join(dimensions[:2])
+
+    @staticmethod
+    def _format_feedback(quality_feedback: list[dict]) -> str:
+        lines = [
+            f"- {item.get('message', '')}"
+            for item in quality_feedback
+            if item.get("type") == "pricing_analysis_insufficient"
+        ]
+        return "\n".join(line for line in lines if line.strip())

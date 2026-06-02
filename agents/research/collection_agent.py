@@ -12,6 +12,7 @@ from agents.base_agent import BaseAgent
 from models.domain import CompetitorList, CompetitorData
 from core.prompt_loader import load as load_prompts
 from core.search_client import SearchClient
+from core.scenario_profile import detect_scenario
 import config
 import json
 
@@ -29,25 +30,34 @@ class CollectionAgent(BaseAgent):
         self.search_client = SearchClient()
 
     async def run(self, product_description: str,
-                  competitor_list: CompetitorList) -> dict[str, CompetitorData]:
+                  competitor_list: CompetitorList,
+                  quality_feedback: list[dict] = None) -> dict[str, CompetitorData]:
         """
         主运行逻辑：逐竞品搜索+汇总
 
         Args:
             product_description: 用户产品描述
             competitor_list: 竞品列表
+            quality_feedback: 质检打回的采集问题
 
         Returns:
             dict[str, CompetitorData]: 竞品名称 → 采集数据
         """
         self._log(f"📊 开始采集数据，共{len(competitor_list.competitors)}个竞品")
+        if quality_feedback:
+            self._log(f"   收到质检反馈: {len(quality_feedback)}条")
 
         result_data = {}
         product_name = competitor_list.product_name
 
         for i, comp in enumerate(competitor_list.competitors):
             self._log(f"   采集 {i+1}/{len(competitor_list.competitors)}: {comp.name}")
-            data = self._collect_competitor(product_name, product_description, comp.name)
+            data = self._collect_competitor(
+                product_name,
+                product_description,
+                comp.name,
+                quality_feedback=quality_feedback or [],
+            )
             result_data[comp.name] = data
 
         self._log(f"✅ 数据采集完成: {len(result_data)}个竞品")
@@ -55,15 +65,35 @@ class CollectionAgent(BaseAgent):
 
     def _collect_competitor(self, product_name: str,
                             product_description: str,
-                            competitor_name: str) -> CompetitorData:
+                            competitor_name: str,
+                            quality_feedback: list[dict] = None) -> CompetitorData:
         """采集单个竞品数据"""
         # 生成搜索查询
+        profile = detect_scenario(product_description)
         queries = [
             f"{competitor_name} 产品功能介绍",
             f"{competitor_name} 定价 价格 收费标准",
             f"{competitor_name} 市场份额 用户量 评测",
             f"{competitor_name} vs {product_name} 对比",
         ]
+        for source_query in profile.source_queries[:4]:
+            queries.append(f"{competitor_name} {source_query}")
+        for modifier in profile.search_modifiers[:3]:
+            queries.append(f"{competitor_name} {modifier}")
+        for feedback in quality_feedback or []:
+            evidence = feedback.get("evidence", {})
+            if evidence.get("competitor") and evidence["competitor"] != competitor_name:
+                continue
+            if feedback.get("type") == "source_insufficient":
+                queries.extend([
+                    f"{competitor_name} 官网 产品 定价",
+                    f"{competitor_name} 用户评价 真实评测",
+                ])
+            elif feedback.get("type") in {"competitor_data_incomplete", "competitor_data_missing"}:
+                queries.extend([
+                    f"{competitor_name} 功能 定价 市场 用户评价",
+                    f"{competitor_name} 产品文档 收费 用户口碑",
+                ])
 
         # 执行搜索
         search_results = self.search_client.batch_search(queries)
@@ -81,12 +111,15 @@ class CollectionAgent(BaseAgent):
 
         # LLM汇总提取
         if config.ENABLE_LLM and all_text:
+            feedback_text = self._format_feedback(quality_feedback or [], competitor_name)
             prompt = self._prompt_collect.format(
                 product_name=product_name,
                 product_description=product_description,
                 competitor_name=competitor_name,
                 search_results=all_text[:8000],
             )
+            if feedback_text:
+                prompt += f"\n\n## 质检返工要求\n{feedback_text}\n请优先补齐上述缺口，避免再次输出无来源或空字段。"
             result = self.ask_llm_json(prompt, max_tokens=4096)
             if result:
                 return CompetitorData(
@@ -109,3 +142,13 @@ class CollectionAgent(BaseAgent):
             product_features=all_text[:500] if all_text else "数据采集失败",
             search_sources=sources,
         )
+
+    @staticmethod
+    def _format_feedback(quality_feedback: list[dict], competitor_name: str) -> str:
+        lines = []
+        for item in quality_feedback:
+            evidence = item.get("evidence", {})
+            if evidence.get("competitor") and evidence["competitor"] != competitor_name:
+                continue
+            lines.append(f"- {item.get('message', '')}")
+        return "\n".join(line for line in lines if line.strip())

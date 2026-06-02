@@ -11,6 +11,7 @@ LLM调用：1次
 from agents.base_agent import BaseAgent
 from models.domain import CompetitorData, ProductAnalysis, FeatureComparison, CompetitiveAdvantage
 from core.prompt_loader import load as load_prompts
+from core.scenario_profile import detect_scenario
 import config
 import json
 
@@ -27,18 +28,22 @@ class ProductAgent(BaseAgent):
         self._prompt_analyze = prompts["prompt_analyze"]
 
     async def run(self, product_name: str,
-                  competitors_data: dict[str, CompetitorData]) -> ProductAnalysis:
+                  competitors_data: dict[str, CompetitorData],
+                  quality_feedback: list[dict] = None) -> ProductAnalysis:
         """
         主运行逻辑：全量数据分析产品对比
 
         Args:
             product_name: 用户产品名称
             competitors_data: 竞品采集数据
+            quality_feedback: 质检打回的产品分析问题
 
         Returns:
             ProductAnalysis: 产品分析结果
         """
         self._log("🔧 开始产品分析...")
+        if quality_feedback:
+            self._log(f"   收到质检反馈: {len(quality_feedback)}条")
 
         # 构建竞品数据摘要
         competitors_text = self._build_competitors_text(product_name, competitors_data)
@@ -48,6 +53,9 @@ class ProductAgent(BaseAgent):
                 product_name=product_name,
                 competitors_text=competitors_text,
             )
+            feedback_text = self._format_feedback(quality_feedback or [])
+            if feedback_text:
+                prompt += f"\n\n## 质检返工要求\n{feedback_text}\n请只输出采集材料能支撑的产品分析结论。"
             result = self.ask_llm_json(prompt, max_tokens=4096)
             if result:
                 analysis = self._parse_product_analysis(result)
@@ -99,17 +107,12 @@ class ProductAgent(BaseAgent):
     def _rule_analyze(self, product_name: str,
                        competitors_data: dict[str, CompetitorData]) -> ProductAnalysis:
         """规则引擎产品分析"""
-        # 简单的关键词匹配
-        all_features = set()
-        feature_keywords = {
-            "即时通讯": ["通讯", "消息", "聊天"],
-            "视频会议": ["视频", "会议", "通话"],
-            "文档协作": ["文档", "协作", "编辑"],
-            "审批流程": ["审批", "流程", "工作流"],
-            "项目管理": ["项目", "任务", "看板"],
-            "数据分析": ["数据", "分析", "报表"],
-            "AI助手": ["AI", "智能", "助手"],
-        }
+        scenario_text = product_name + " " + " ".join(
+            f"{data.product_features} {data.pricing_info} {data.market_share} {data.user_reviews}"
+            for data in competitors_data.values()
+        )
+        profile = detect_scenario(scenario_text)
+        feature_keywords = self._build_feature_keywords(profile.product_dimensions)
 
         feature_matrix = []
         for feature, keywords in feature_keywords.items():
@@ -134,6 +137,37 @@ class ProductAgent(BaseAgent):
         return ProductAnalysis(
             feature_matrix=feature_matrix,
             competitive_advantages=[],
-            differentiation_points=["(规则引擎分析，详情请启用LLM)"],
-            summary="基于关键词匹配的简单产品对比（建议启用LLM获得深度分析）",
+            differentiation_points=[f"{profile.category}场景下需重点验证: {profile.product_dimensions[0]}"],
+            summary=f"基于{profile.category}场景维度的规则产品对比（建议启用LLM获得深度分析）",
         )
+
+    @staticmethod
+    def _build_feature_keywords(dimensions: tuple[str, ...]) -> dict[str, list[str]]:
+        feature_keywords = {}
+        for dimension in dimensions:
+            words = [dimension]
+            if "AI" in dimension or "智能" in dimension:
+                words.extend(["AI", "智能", "助手", "算法"])
+            if "价格" in dimension or "定价" in dimension:
+                words.extend(["价格", "收费", "订阅"])
+            if "用户" in dimension or "体验" in dimension:
+                words.extend(["用户", "体验", "评价"])
+            if "安全" in dimension or "合规" in dimension:
+                words.extend(["安全", "合规", "权限"])
+            if "生态" in dimension or "集成" in dimension:
+                words.extend(["生态", "集成", "接口", "插件"])
+            feature_keywords[dimension] = list(dict.fromkeys(words))
+        return feature_keywords
+
+    @staticmethod
+    def _format_feedback(quality_feedback: list[dict]) -> str:
+        relevant = {
+            "product_analysis_insufficient",
+            "product_claim_unsupported",
+        }
+        lines = [
+            f"- {item.get('message', '')}"
+            for item in quality_feedback
+            if item.get("type") in relevant
+        ]
+        return "\n".join(line for line in lines if line.strip())

@@ -8,11 +8,22 @@ agents/quality_check_agent.py — 质检Agent
 
 from agents.base_agent import BaseAgent
 from core.graph_state import GraphState
+from core.type_utils import (
+    to_product_analysis,
+    to_pricing_analysis,
+    to_market_analysis,
+)
 import time
 
 
 class QualityCheckAgent(BaseAgent):
     """数据与分析质量审核Agent"""
+
+    MIN_SOURCE_COUNT = 2
+    MIN_COMPETITOR_COUNT = 3
+    MIN_FEATURE_COUNT = 3
+    MIN_PRICING_ITEM_COUNT = 2
+    MIN_MARKET_ITEM_COUNT = 2
 
     def __init__(self):
         super().__init__(
@@ -81,6 +92,63 @@ class QualityCheckAgent(BaseAgent):
             )
         return cl
 
+    @staticmethod
+    def _is_blank(value: str) -> bool:
+        return not value or not str(value).strip()
+
+    @staticmethod
+    def _contains_any(text: str, words: list[str]) -> bool:
+        haystack = (text or "").lower()
+        return any(word.lower() in haystack for word in words if word)
+
+    @staticmethod
+    def _issue(issue_type: str, severity: str, message: str,
+               rollback_to: str, evidence: dict = None) -> dict:
+        return {
+            "type": issue_type,
+            "severity": severity,
+            "message": message,
+            "rollback_to": rollback_to,
+            "evidence": evidence or {},
+        }
+
+    @staticmethod
+    def _select_rollback_target(issues: list[dict]) -> str:
+        """按最高影响面选择一个回退目标：发现 > 采集 > 分析。"""
+        if not issues:
+            return ""
+        priority = {
+            "discovery": 0,
+            "collection": 1,
+            "parallel_analysis": 2,
+            "product_analysis": 2,
+            "pricing_analysis": 2,
+            "market_analysis": 2,
+        }
+        target = min(
+            (issue.get("rollback_to", "collection") for issue in issues),
+            key=lambda item: priority.get(item, 9),
+        )
+        if target in {"product_analysis", "pricing_analysis", "market_analysis"}:
+            return "parallel_analysis"
+        return target
+
+    @staticmethod
+    def _build_feedback(issues: list[dict], rollback_target: str) -> list[dict]:
+        feedback = []
+        for issue in issues:
+            target = issue.get("rollback_to", "")
+            if target in {"product_analysis", "pricing_analysis", "market_analysis"}:
+                target = "parallel_analysis"
+            if target == rollback_target:
+                feedback.append({
+                    "type": issue.get("type", ""),
+                    "severity": issue.get("severity", ""),
+                    "message": issue.get("message", ""),
+                    "evidence": issue.get("evidence", {}),
+                })
+        return feedback
+
     async def run(self, state: GraphState) -> dict:
         """
         执行质量质检
@@ -97,87 +165,150 @@ class QualityCheckAgent(BaseAgent):
 
         # ── 检查1: 竞品列表有效性 ──
         if not competitor_list or not competitor_list.competitors:
-            issues.append({
-                "type": "competitor_list_empty",
-                "severity": "critical",
-                "message": "竞品列表为空，需重新执行发现流程",
-                "rollback_to": "discovery"
-            })
+            issues.append(self._issue(
+                "competitor_list_empty",
+                "critical",
+                "竞品列表为空，需重新执行发现流程",
+                "discovery",
+            ))
             score -= 0.4
             self._log("   ❌ 竞品列表为空")
         else:
             competitor_count = len(competitor_list.competitors)
             self._log(f"   ✅ 竞品列表有效: {competitor_count}个竞品")
+            if competitor_count < self.MIN_COMPETITOR_COUNT:
+                issues.append(self._issue(
+                    "competitor_count_low",
+                    "high",
+                    f"竞品数量不足，仅发现{competitor_count}个，建议至少{self.MIN_COMPETITOR_COUNT}个",
+                    "discovery",
+                    {"competitor_count": competitor_count},
+                ))
+                score -= 0.2
 
         # ── 检查2: 数据采集完整性 ──
         competitors_data_raw = state.get("competitors_data") or []
         competitors_data = [self._safe_convert_competitor_data(cd) for cd in competitors_data_raw]
-        missing_data_count = 0
+        expected_count = len(competitor_list.competitors) if competitor_list else 0
+        if expected_count and len(competitors_data) < expected_count:
+            issues.append(self._issue(
+                "competitor_data_missing",
+                "high",
+                f"采集结果数量不足，应有{expected_count}个，实际{len(competitors_data)}个",
+                "collection",
+                {"expected_count": expected_count, "actual_count": len(competitors_data)},
+            ))
+            score -= 0.2
         for cd in competitors_data:
-            if not cd.product_features and not cd.pricing_info and not cd.market_share:
-                missing_data_count += 1
-                issues.append({
-                    "type": "competitor_data_empty",
-                    "severity": "high",
-                    "message": f"竞品[{cd.name}]数据完全缺失",
-                    "rollback_to": "collection"
-                })
+            missing_fields = [
+                field for field in ("product_features", "pricing_info", "market_share", "user_reviews")
+                if self._is_blank(getattr(cd, field, ""))
+            ]
+            if len(missing_fields) >= 3:
+                issues.append(self._issue(
+                    "competitor_data_incomplete",
+                    "high",
+                    f"竞品[{cd.name}]核心采集字段缺失: {', '.join(missing_fields)}",
+                    "collection",
+                    {"competitor": cd.name, "missing_fields": missing_fields},
+                ))
                 score -= 0.15
-                self._log(f"   ⚠️  竞品[{cd.name}]数据为空")
+                self._log(f"   ⚠️  竞品[{cd.name}]采集字段缺失: {missing_fields}")
+            if len(cd.search_sources) < self.MIN_SOURCE_COUNT:
+                issues.append(self._issue(
+                    "source_insufficient",
+                    "high",
+                    f"竞品[{cd.name}]来源数量不足，仅{len(cd.search_sources)}条",
+                    "collection",
+                    {"competitor": cd.name, "source_count": len(cd.search_sources)},
+                ))
+                score -= 0.1
+                self._log(f"   ⚠️  竞品[{cd.name}]来源不足")
 
         # ── 检查3: 产品分析完整性 ──
-        product_analysis = state.get("product_analysis")
-        if not product_analysis or len(product_analysis.feature_matrix) < 2:
-            issues.append({
-                "type": "product_analysis_insufficient",
-                "severity": "medium",
-                "message": "产品分析特征矩阵维度太少",
-                "rollback_to": "product_analysis"
-            })
+        product_analysis = to_product_analysis(state.get("product_analysis"))
+        if not product_analysis or len(product_analysis.feature_matrix) < self.MIN_FEATURE_COUNT:
+            issues.append(self._issue(
+                "product_analysis_insufficient",
+                "medium",
+                f"产品分析特征矩阵维度太少，需至少{self.MIN_FEATURE_COUNT}个",
+                "product_analysis",
+                {"feature_count": len(product_analysis.feature_matrix) if product_analysis else 0},
+            ))
             score -= 0.2
             self._log("   ⚠️  产品分析特征维度不足")
         else:
             self._log(f"   ✅ 产品分析OK: {len(product_analysis.feature_matrix)}个特征")
 
         # ── 检查4: 定价分析完整性 ──
-        pricing_analysis = state.get("pricing_analysis")
-        if not pricing_analysis or len(pricing_analysis.pricing_comparison) < 2:
-            issues.append({
-                "type": "pricing_analysis_insufficient",
-                "severity": "medium",
-                "message": "定价对比项不足",
-                "rollback_to": "pricing_analysis"
-            })
+        pricing_analysis = to_pricing_analysis(state.get("pricing_analysis"))
+        if not pricing_analysis or len(pricing_analysis.pricing_comparison) < self.MIN_PRICING_ITEM_COUNT:
+            issues.append(self._issue(
+                "pricing_analysis_insufficient",
+                "medium",
+                f"定价对比项不足，需至少{self.MIN_PRICING_ITEM_COUNT}项",
+                "pricing_analysis",
+                {"pricing_item_count": len(pricing_analysis.pricing_comparison) if pricing_analysis else 0},
+            ))
             score -= 0.15
             self._log("   ⚠️  定价分析数据不足")
         else:
             self._log(f"   ✅ 定价分析OK: {len(pricing_analysis.pricing_comparison)}个定价项")
 
         # ── 检查5: 市场分析完整性 ──
-        market_analysis = state.get("market_analysis")
-        if not market_analysis or len(market_analysis.market_share_data) < 2:
-            issues.append({
-                "type": "market_analysis_insufficient",
-                "severity": "medium",
-                "message": "市场份额数据不足",
-                "rollback_to": "market_analysis"
-            })
+        market_analysis = to_market_analysis(state.get("market_analysis"))
+        if not market_analysis or len(market_analysis.market_share_data) < self.MIN_MARKET_ITEM_COUNT:
+            issues.append(self._issue(
+                "market_analysis_insufficient",
+                "medium",
+                f"市场份额数据不足，需至少{self.MIN_MARKET_ITEM_COUNT}项",
+                "market_analysis",
+                {"market_item_count": len(market_analysis.market_share_data) if market_analysis else 0},
+            ))
             score -= 0.15
             self._log("   ⚠️  市场分析数据不足")
         else:
             self._log(f"   ✅ 市场分析OK: {len(market_analysis.market_share_data)}个市场数据")
 
+        # ── 检查6: 简单证据覆盖，避免分析结论脱离采集材料 ──
+        source_text = "\n".join(
+            f"{cd.name} {cd.product_features} {cd.pricing_info} {cd.market_share} "
+            f"{cd.user_reviews} {cd.strengths} {cd.weaknesses} {cd.channels}"
+            for cd in competitors_data
+        )
+        if product_analysis and product_analysis.differentiation_points:
+            unsupported = [
+                point for point in product_analysis.differentiation_points[:5]
+                if not self._contains_any(source_text, [point])
+            ]
+            if len(unsupported) >= 3:
+                issues.append(self._issue(
+                    "product_claim_unsupported",
+                    "medium",
+                    "产品差异化结论缺少采集材料支撑",
+                    "product_analysis",
+                    {"unsupported_points": unsupported},
+                ))
+                score -= 0.1
+
         # ── 最终判定 ──
         score = max(0.0, min(1.0, score))
         passed = score >= 0.7 or (state.get("retry_count", 0) >= state.get("max_retries", 2))
         retry_count = state.get("retry_count", 0) + 1
+        rollback_target = "" if passed else self._select_rollback_target(issues)
+        quality_feedback = [] if passed else self._build_feedback(issues, rollback_target)
 
-        self._log(f"📊 质检完成: 得分 {score:.2f} / 1.0, 通过={passed}, 重试次数={retry_count}")
+        self._log(
+            f"📊 质检完成: 得分 {score:.2f} / 1.0, 通过={passed}, "
+            f"回退目标={rollback_target or '无'}, 重试次数={retry_count}"
+        )
 
         return {
             "quality_check_passed": passed,
             "quality_score": score,
             "issues_found": issues,
+            "rollback_target": rollback_target,
+            "quality_feedback": quality_feedback,
             "retry_count": retry_count,
             "execution_logs": [{
                 "agent": "QualityCheckAgent",

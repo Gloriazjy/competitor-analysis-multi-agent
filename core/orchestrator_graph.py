@@ -76,7 +76,11 @@ class LangGraphOrchestrator:
         comp_list = to_competitor_list(raw_cl)
         
         product_desc = state["product_description"]
-        result = await self.collection_agent.run(product_desc, comp_list)
+        result = await self.collection_agent.run(
+            product_desc,
+            comp_list,
+            quality_feedback=state.get("quality_feedback", []),
+        )
         state["timings"]["collection"] = time.time() - start
         return {"competitors_data": result}
 
@@ -98,9 +102,21 @@ class LangGraphOrchestrator:
         comp_data_dict = {cd.name: cd for cd in comp_data_list}
         
         pa, pra, ma = await asyncio.gather(
-            self.product_agent.run(product_name, comp_data_dict),
-            self.pricing_agent.run(product_name, comp_data_dict),
-            self.market_agent.run(product_name, comp_data_dict)
+            self.product_agent.run(
+                product_name,
+                comp_data_dict,
+                quality_feedback=state.get("quality_feedback", []),
+            ),
+            self.pricing_agent.run(
+                product_name,
+                comp_data_dict,
+                quality_feedback=state.get("quality_feedback", []),
+            ),
+            self.market_agent.run(
+                product_name,
+                comp_data_dict,
+                quality_feedback=state.get("quality_feedback", []),
+            )
         )
         state["timings"]["parallel_analysis"] = time.time() - start
         return {
@@ -151,13 +167,20 @@ class LangGraphOrchestrator:
 
     # ── 条件边路由 ──
     def router_after_quality_check(self, state: GraphState) -> str:
-        """质检后的条件路由：通过就去策略报告，不通过就回退到数据采集"""
+        """质检后的条件路由：通过就去策略报告，不通过就按问题目标回退"""
         if state.get("quality_check_passed"):
             print(f"  ✅ 质检通过 (得分 {state.get('quality_score', 0):.2f}) → 进入策略生成")
             return "strategy"
-        else:
-            print(f"  🔄 质检未通过 (得分 {state.get('quality_score', 0):.2f}) → 回退重做采集与分析")
-            return "rollback_to_collection"
+
+        target = state.get("rollback_target") or "collection"
+        allowed_targets = {"discovery", "collection", "parallel_analysis"}
+        if target not in allowed_targets:
+            target = "collection"
+        print(
+            f"  🔄 质检未通过 (得分 {state.get('quality_score', 0):.2f}) "
+            f"→ 回退到 {target}"
+        )
+        return target
 
     def build_graph(self):
         """构建完整LangGraph StateGraph"""
@@ -181,7 +204,9 @@ class LangGraphOrchestrator:
             "quality_check",
             self.router_after_quality_check,
             {
-                "rollback_to_collection": "collection",
+                "discovery": "discovery",
+                "collection": "collection",
+                "parallel_analysis": "parallel_analysis",
                 "strategy": "strategy"
             }
         )
@@ -221,6 +246,8 @@ class LangGraphOrchestrator:
             "quality_check_passed": False,
             "quality_score": 0.0,
             "issues_found": [],
+            "rollback_target": "",
+            "quality_feedback": [],
             "retry_count": 0,
             "max_retries": 1,
             "timings": {},

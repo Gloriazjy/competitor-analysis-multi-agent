@@ -43,6 +43,8 @@ class GraphState(TypedDict):
     quality_check_passed: bool
     quality_score: float
     issues_found: Sequence[dict]
+    rollback_target: str
+    quality_feedback: Sequence[dict]
     retry_count: int
     max_retries: int
     

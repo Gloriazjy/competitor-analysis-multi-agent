@@ -12,6 +12,7 @@ from agents.base_agent import BaseAgent
 from models.domain import CompetitorInfo, CompetitorList
 from core.prompt_loader import load as load_prompts
 from core.search_client import SearchClient
+from core.scenario_profile import detect_scenario, infer_product_name
 import config
 import json
 
@@ -42,6 +43,8 @@ class DiscoveryAgent(BaseAgent):
             CompetitorList: 发现的竞品列表
         """
         self._log(f"🔍 开始发现竞品: {product_description[:50]}...")
+        profile = detect_scenario(product_description)
+        self._log(f"   识别场景: {profile.category}")
 
         # ── 步骤1: 生成搜索关键词 ──
         keywords = self._generate_keywords(product_description)
@@ -82,13 +85,18 @@ class DiscoveryAgent(BaseAgent):
 
     def _rule_keywords(self, product_description: str) -> list[str]:
         """规则引擎生成搜索关键词"""
-        name = product_description.strip().split("，")[0].split(",")[0]
-        return [
+        name = infer_product_name(product_description)
+        profile = detect_scenario(product_description)
+        keywords = [
             f"{name}竞品分析",
             f"{name}替代产品",
             f"{name}同类产品对比",
             f"类似{name}的产品",
         ]
+        for modifier in profile.search_modifiers[:4]:
+            keywords.append(f"{name} {modifier}")
+        keywords.append(f"{profile.category} 主流产品 排名")
+        return list(dict.fromkeys(keywords))[:8]
 
     def _search(self, keywords: list[str]) -> list[dict]:
         """执行搜索"""
@@ -125,7 +133,7 @@ class DiscoveryAgent(BaseAgent):
                     ))
                 return CompetitorList(
                     product_name=result.get("product_name", product_description),
-                    product_category=result.get("product_category", ""),
+                    product_category=result.get("product_category", "") or detect_scenario(product_description).category,
                     competitors=competitors[:max_competitors],
                     search_keywords_used=[sr.get("query", "") for sr in search_results],
                 )
@@ -142,86 +150,21 @@ class DiscoveryAgent(BaseAgent):
         import re
         competitors = []
         seen_names = set()
-        product_name = product_description.strip().split("，")[0].split(",")[0]
+        product_name = infer_product_name(product_description)
         seen_names.add(product_name)
+        profile = detect_scenario(product_description)
 
-        # 预设领域竞品库 - 覆盖常见产品品类
-        domain_competitors = {
-            # 学习机领域
-            "学习机": [
-                "步步高学习机",
-                "作业帮学习机",
-                "科大讯飞学习机",
-                "学而思学习机",
-                "普通平板电脑"
-            ],
-            "小度学习机": [
-                "步步高学习机",
-                "作业帮学习机",
-                "科大讯飞学习机",
-                "学而思学习机",
-                "普通平板电脑"
-            ],
-            "步步高学习机": [
-                "小度学习机",
-                "作业帮学习机",
-                "科大讯飞学习机",
-                "学而思学习机",
-                "普通平板电脑"
-            ],
-            # 办公协作软件领域
-            "飞书": [
-                "钉钉",
-                "企业微信",
-                "腾讯会议",
-                "Zoom",
-                "Notion"
-            ],
-            "钉钉": [
-                "飞书",
-                "企业微信",
-                "腾讯会议",
-                "Zoom",
-                "Notion"
-            ],
-            # 智能手机领域
-            "手机": [
-                "iPhone",
-                "华为手机",
-                "小米手机",
-                "OPPO手机",
-                "vivo手机"
-            ],
-            # 电动汽车领域
-            "电动汽车": [
-                "特斯拉",
-                "比亚迪",
-                "小鹏汽车",
-                "理想汽车",
-                "蔚来汽车"
-            ],
-            "电动车": [
-                "特斯拉",
-                "比亚迪",
-                "小鹏汽车",
-                "理想汽车",
-                "蔚来汽车"
-            ]
-        }
-
-        # 首先检查是否匹配预设领域
-        for domain, comp_list in domain_competitors.items():
-            if domain in product_description:
-                self._log(f"   📚 匹配领域库: {domain}")
-                for name in comp_list[:max_competitors]:
-                    if name not in seen_names:
-                        seen_names.add(name)
-                        competitors.append(CompetitorInfo(
-                            name=name,
-                            brief=f"同品类主流竞品产品",
-                            relevance="HIGH",
-                        ))
-                break
+        # 首先使用场景画像兜底，保证无搜索结果时也能覆盖多行业演示
+        if profile.competitor_candidates:
+            self._log(f"   📚 匹配场景库: {profile.category}")
+            for name in profile.competitor_candidates[:max_competitors]:
+                if name not in seen_names:
+                    seen_names.add(name)
+                    competitors.append(CompetitorInfo(
+                        name=name,
+                        brief=f"{profile.category}主流竞品",
+                        relevance="HIGH",
+                    ))
 
         # 如果领域库没匹配到，尝试从搜索结果提取产品名
         if not competitors:
@@ -263,7 +206,7 @@ class DiscoveryAgent(BaseAgent):
 
         return CompetitorList(
             product_name=product_name,
-            product_category="",
+            product_category=profile.category,
             competitors=competitors,
             search_keywords_used=[sr.get("query", "") for sr in search_results],
         )

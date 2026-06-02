@@ -11,6 +11,7 @@ LLM调用：1次
 from agents.base_agent import BaseAgent
 from models.domain import CompetitorData, MarketAnalysis, MarketShareItem, UserReputation
 from core.prompt_loader import load as load_prompts
+from core.scenario_profile import detect_scenario
 import config
 import json
 
@@ -27,18 +28,22 @@ class MarketAgent(BaseAgent):
         self._prompt_analyze = prompts["prompt_analyze"]
 
     async def run(self, product_name: str,
-                  competitors_data: dict[str, CompetitorData]) -> MarketAnalysis:
+                  competitors_data: dict[str, CompetitorData],
+                  quality_feedback: list[dict] = None) -> MarketAnalysis:
         """
         主运行逻辑：全量数据分析市场格局
 
         Args:
             product_name: 用户产品名称
             competitors_data: 竞品采集数据
+            quality_feedback: 质检打回的市场分析问题
 
         Returns:
             MarketAnalysis: 市场分析结果
         """
         self._log("📈 开始市场分析...")
+        if quality_feedback:
+            self._log(f"   收到质检反馈: {len(quality_feedback)}条")
 
         competitors_text = self._build_competitors_text(product_name, competitors_data)
 
@@ -47,6 +52,9 @@ class MarketAgent(BaseAgent):
                 product_name=product_name,
                 competitors_text=competitors_text,
             )
+            feedback_text = self._format_feedback(quality_feedback or [])
+            if feedback_text:
+                prompt += f"\n\n## 质检返工要求\n{feedback_text}\n请补齐市场份额、趋势和用户口碑维度，并避免无来源判断。"
             result = self.ask_llm_json(prompt, max_tokens=4096)
             if result:
                 analysis = self._parse_market_analysis(result)
@@ -97,18 +105,51 @@ class MarketAgent(BaseAgent):
     def _rule_analyze(self, product_name: str,
                        competitors_data: dict[str, CompetitorData]) -> MarketAnalysis:
         """规则引擎市场分析"""
+        scenario_text = product_name + " " + " ".join(
+            f"{data.product_features} {data.pricing_info} {data.market_share} {data.user_reviews}"
+            for data in competitors_data.values()
+        )
+        profile = detect_scenario(scenario_text)
         market_share_data = []
+        user_reputation = {}
         for name, data in competitors_data.items():
             market_share_data.append(MarketShareItem(
                 competitor=name,
                 share_estimate=data.market_share[:100] if data.market_share else "未知",
-                trend="未知",
+                trend=self._infer_trend(data.market_share + " " + data.user_reviews),
             ))
+            if data.user_reviews:
+                user_reputation[name] = UserReputation(
+                    score="需核实",
+                    keywords=self._extract_reputation_keywords(data.user_reviews),
+                )
 
         return MarketAnalysis(
             market_share_data=market_share_data,
-            growth_trends="(规则引擎分析，详情请启用LLM)",
-            user_reputation={},
-            channel_analysis="",
-            summary="基于搜索结果的简单市场信息提取（建议启用LLM获得深度分析）",
+            growth_trends=f"按{profile.category}场景关注: {', '.join(profile.market_dimensions)}",
+            user_reputation=user_reputation,
+            channel_analysis="需结合官网、电商/应用商店、行业榜单继续核实",
+            summary=f"基于{profile.category}场景维度的规则市场信息提取（建议启用LLM获得深度分析）",
         )
+
+    @staticmethod
+    def _infer_trend(text: str) -> str:
+        if any(word in text for word in ("增长", "上升", "热门", "领先")):
+            return "增长/领先线索"
+        if any(word in text for word in ("下降", "下滑", "投诉", "流失")):
+            return "下滑/风险线索"
+        return "未知"
+
+    @staticmethod
+    def _extract_reputation_keywords(text: str) -> list[str]:
+        candidates = ("好评", "差评", "易用", "贵", "稳定", "卡顿", "服务", "体验", "安全", "续航")
+        return [word for word in candidates if word in text][:5]
+
+    @staticmethod
+    def _format_feedback(quality_feedback: list[dict]) -> str:
+        lines = [
+            f"- {item.get('message', '')}"
+            for item in quality_feedback
+            if item.get("type") == "market_analysis_insufficient"
+        ]
+        return "\n".join(line for line in lines if line.strip())
