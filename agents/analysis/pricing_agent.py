@@ -107,12 +107,27 @@ class PricingAgent(BaseAgent):
         pricing_comparison = []
         for name, data in competitors_data.items():
             pricing_text = data.pricing_info or ""
-            pricing_comparison.append(PricingItem(
-                competitor=name,
-                free_tier=self._extract_pricing_hint(pricing_text, ["免费", "free", "试用"]),
-                paid_tier=pricing_text[:120] if pricing_text else "未知",
-                pricing_model=self._infer_pricing_model(pricing_text, profile.pricing_dimensions),
-            ))
+            if data.offers:
+                for offer in data.offers[:3]:
+                    price = str(offer.get("price", "") or "未知")
+                    included = offer.get("included", [])
+                    excluded = offer.get("excluded", [])
+                    pricing_comparison.append(PricingItem(
+                        competitor=name,
+                        free_tier="包含: " + "、".join(included[:4]) if included else "包含项需核实",
+                        paid_tier=f"{price} {offer.get('unit', '')}".strip(),
+                        pricing_model=self._infer_pricing_model(
+                            pricing_text + " " + json.dumps(offer, ensure_ascii=False),
+                            profile.pricing_dimensions,
+                        ),
+                    ))
+            else:
+                pricing_comparison.append(PricingItem(
+                    competitor=name,
+                    free_tier=self._extract_pricing_hint(pricing_text, ["免费", "free", "试用"]),
+                    paid_tier=pricing_text[:120] if pricing_text else "未知",
+                    pricing_model=self._infer_pricing_model(pricing_text, profile.pricing_dimensions),
+                ))
 
         return PricingAnalysis(
             pricing_comparison=pricing_comparison,

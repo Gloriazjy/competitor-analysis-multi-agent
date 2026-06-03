@@ -116,19 +116,19 @@ class MarketAgent(BaseAgent):
             market_share_data.append(MarketShareItem(
                 competitor=name,
                 share_estimate=data.market_share[:100] if data.market_share else "未知",
-                trend=self._infer_trend(data.market_share + " " + data.user_reviews),
+                trend=self._infer_trend(data.market_share + " " + data.user_reviews + " " + " ".join(data.risk_flags)),
             ))
-            if data.user_reviews:
+            if data.user_reviews or data.risk_flags:
                 user_reputation[name] = UserReputation(
                     score="需核实",
-                    keywords=self._extract_reputation_keywords(data.user_reviews),
+                    keywords=self._extract_reputation_keywords(data.user_reviews + " " + " ".join(data.risk_flags)),
                 )
 
         return MarketAnalysis(
             market_share_data=market_share_data,
             growth_trends=f"按{profile.category}场景关注: {', '.join(profile.market_dimensions)}",
             user_reputation=user_reputation,
-            channel_analysis="需结合官网、电商/应用商店、行业榜单继续核实",
+            channel_analysis=self._build_channel_analysis(competitors_data),
             summary=f"基于{profile.category}场景维度的规则市场信息提取（建议启用LLM获得深度分析）",
         )
 
@@ -144,6 +144,21 @@ class MarketAgent(BaseAgent):
     def _extract_reputation_keywords(text: str) -> list[str]:
         candidates = ("好评", "差评", "易用", "贵", "稳定", "卡顿", "服务", "体验", "安全", "续航")
         return [word for word in candidates if word in text][:5]
+
+    @staticmethod
+    def _build_channel_analysis(competitors_data: dict[str, CompetitorData]) -> str:
+        parts = []
+        for name, data in competitors_data.items():
+            channels = []
+            if data.channels:
+                channels.append(data.channels[:60])
+            if data.contact_methods:
+                channels.append("有联系方式")
+            if data.source_urls:
+                channels.append("有可跳转来源")
+            if channels:
+                parts.append(f"{name}: {'; '.join(channels)}")
+        return "\n".join(parts) if parts else "需结合官网、电商/应用商店、行业榜单继续核实"
 
     @staticmethod
     def _format_feedback(quality_feedback: list[dict]) -> str:

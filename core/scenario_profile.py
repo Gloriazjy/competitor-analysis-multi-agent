@@ -19,6 +19,8 @@ class ScenarioProfile:
     pricing_dimensions: tuple[str, ...]
     market_dimensions: tuple[str, ...]
     source_queries: tuple[str, ...] = field(default_factory=tuple)
+    offer_dimensions: tuple[str, ...] = field(default_factory=tuple)
+    quality_risks: tuple[str, ...] = field(default_factory=tuple)
 
 
 SCENARIO_PROFILES: tuple[ScenarioProfile, ...] = (
@@ -32,6 +34,8 @@ SCENARIO_PROFILES: tuple[ScenarioProfile, ...] = (
         pricing_dimensions=("硬件售价", "课程订阅", "增值服务", "售后保修"),
         market_dimensions=("目标年级", "家长口碑", "渠道覆盖", "教育资源合作"),
         source_queries=("官网", "京东", "评测", "家长评价"),
+        offer_dimensions=("报价", "包含服务", "售后", "适用人群"),
+        quality_risks=("夸大AI能力", "课程资源不透明", "售后限制"),
     ),
     ScenarioProfile(
         scenario_id="enterprise_saas",
@@ -43,6 +47,8 @@ SCENARIO_PROFILES: tuple[ScenarioProfile, ...] = (
         pricing_dimensions=("免费版", "团队版", "企业版", "按席位计费", "私有化部署"),
         market_dimensions=("目标客群", "行业案例", "生态伙伴", "用户口碑"),
         source_queries=("官网", "价格页", "帮助中心", "客户案例"),
+        offer_dimensions=("套餐价格", "席位数", "功能权限", "服务支持", "合同周期"),
+        quality_risks=("隐藏增购", "私有化费用不透明", "安全合规表述无证据"),
     ),
     ScenarioProfile(
         scenario_id="consumer_app",
@@ -54,6 +60,8 @@ SCENARIO_PROFILES: tuple[ScenarioProfile, ...] = (
         pricing_dimensions=("免费模式", "会员订阅", "广告变现", "增值服务"),
         market_dimensions=("用户画像", "下载热度", "社区活跃度", "口碑趋势"),
         source_queries=("应用商店", "七麦数据", "用户评价", "版本记录"),
+        offer_dimensions=("会员价格", "免费权益", "增值服务", "广告/内购"),
+        quality_risks=("刷量口碑", "隐私风险", "隐藏自动续费"),
     ),
     ScenarioProfile(
         scenario_id="hardware_device",
@@ -65,6 +73,8 @@ SCENARIO_PROFILES: tuple[ScenarioProfile, ...] = (
         pricing_dimensions=("官方售价", "渠道价", "套餐", "保修服务"),
         market_dimensions=("销量", "渠道覆盖", "品牌口碑", "用户评价"),
         source_queries=("官网", "电商平台", "评测", "参数"),
+        offer_dimensions=("官方售价", "套装权益", "保修", "渠道价"),
+        quality_risks=("渠道价不稳定", "售后限制", "参数虚标"),
     ),
     ScenarioProfile(
         scenario_id="vehicle_mobility",
@@ -76,6 +86,8 @@ SCENARIO_PROFILES: tuple[ScenarioProfile, ...] = (
         pricing_dimensions=("官方指导价", "选装价格", "金融方案", "补贴政策"),
         market_dimensions=("销量趋势", "目标用户", "渠道网络", "车主口碑"),
         source_queries=("官网", "懂车帝", "汽车之家", "销量"),
+        offer_dimensions=("指导价", "选装", "金融方案", "保养/补能权益"),
+        quality_risks=("优惠口径不一致", "选装成本", "交付周期"),
     ),
     ScenarioProfile(
         scenario_id="finance_service",
@@ -87,6 +99,8 @@ SCENARIO_PROFILES: tuple[ScenarioProfile, ...] = (
         pricing_dimensions=("手续费", "服务费率", "会员权益", "优惠政策"),
         market_dimensions=("目标客群", "渠道合作", "品牌信任", "投诉口碑"),
         source_queries=("官网", "费率", "监管", "投诉"),
+        offer_dimensions=("费率", "服务费", "权益", "风控/保障"),
+        quality_risks=("费率口径不清", "合规风险", "投诉风险"),
     ),
     ScenarioProfile(
         scenario_id="game_content",
@@ -98,6 +112,21 @@ SCENARIO_PROFILES: tuple[ScenarioProfile, ...] = (
         pricing_dimensions=("免费游玩", "内购", "月卡", "皮肤道具", "会员订阅"),
         market_dimensions=("活跃用户", "流水表现", "社区口碑", "版本热度"),
         source_queries=("官网", "TapTap", "七麦数据", "玩家评价"),
+        offer_dimensions=("内购价格", "月卡", "会员", "活动权益"),
+        quality_risks=("氪金压力", "流水口径不明", "玩家口碑两极化"),
+    ),
+    ScenarioProfile(
+        scenario_id="service_package",
+        category="服务套餐/团购方案",
+        keywords=("旅游团", "跟团游", "报团", "团购", "套餐", "服务商", "报价", "大环线", "小团", "包车", "纯玩"),
+        competitor_candidates=("携程", "飞猪", "途牛", "马蜂窝", "Klook", "本地旅行社", "定制服务商"),
+        search_modifiers=("价格", "费用包含", "联系方式", "用户评价", "隐形消费", "退款政策"),
+        product_dimensions=("服务内容", "交付流程", "附赠服务", "履约保障", "灵活性", "售后/退款"),
+        pricing_dimensions=("人均价格", "总价", "费用包含", "费用不含", "隐藏成本", "退款政策"),
+        market_dimensions=("平台口碑", "销量/热度", "真实评价", "供应商资质"),
+        source_queries=("官网", "平台页面", "联系方式", "用户评价", "费用包含", "退款政策"),
+        offer_dimensions=("价格", "天数/周期", "人数限制", "包含服务", "不含费用", "联系方式", "预订链接"),
+        quality_risks=("隐形消费", "虚假低价", "评论不可验证", "联系方式缺失", "退款规则不清"),
     ),
 )
 
@@ -112,6 +141,8 @@ DEFAULT_PROFILE = ScenarioProfile(
     pricing_dimensions=("免费能力", "付费方案", "定价模型", "性价比"),
     market_dimensions=("目标用户", "市场热度", "用户口碑", "渠道策略"),
     source_queries=("官网", "价格", "评测", "用户评价"),
+    offer_dimensions=("价格", "包含权益", "限制条件", "联系方式/购买入口"),
+    quality_risks=("来源不足", "价格口径不清", "口碑无证据", "隐藏成本"),
 )
 
 

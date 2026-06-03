@@ -38,6 +38,7 @@ def to_competitor_data(cd):
     if isinstance(cd, dict):
         return CompetitorData(
             name=cd.get("name", ""),
+            category=cd.get("category", ""),
             product_features=cd.get("product_features", ""),
             pricing_info=cd.get("pricing_info", ""),
             market_share=cd.get("market_share", ""),
@@ -45,6 +46,11 @@ def to_competitor_data(cd):
             strengths=cd.get("strengths", ""),
             weaknesses=cd.get("weaknesses", ""),
             channels=cd.get("channels", ""),
+            offers=cd.get("offers", []),
+            contact_methods=cd.get("contact_methods", []),
+            source_urls=cd.get("source_urls", []),
+            evidence_notes=cd.get("evidence_notes", []),
+            risk_flags=cd.get("risk_flags", []),
             search_sources=cd.get("search_sources", [])
         )
     

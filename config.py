@@ -16,6 +16,24 @@ LLM后端选择：
 
 import os
 
+
+def _load_dotenv(path: str = ".env"):
+    """Load simple KEY=VALUE lines from .env without extra dependencies."""
+    if not os.path.exists(path):
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            os.environ.setdefault(key, value)
+
+
+_load_dotenv()
+
 # ========================
 # LLM 后端选择
 # ========================

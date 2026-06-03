@@ -13,6 +13,7 @@ from core.type_utils import (
     to_pricing_analysis,
     to_market_analysis,
 )
+from core.scenario_profile import detect_scenario
 import time
 
 
@@ -55,18 +56,24 @@ class QualityCheckAgent(BaseAgent):
                 return CompetitorData(name=cd)
         
         # 情况3: 字典形式
-        if isinstance(cd, dict):
-            return CompetitorData(
-                name=cd.get("name", ""),
-                product_features=cd.get("product_features", ""),
-                pricing_info=cd.get("pricing_info", ""),
-                market_share=cd.get("market_share", ""),
-                user_reviews=cd.get("user_reviews", ""),
-                strengths=cd.get("strengths", ""),
-                weaknesses=cd.get("weaknesses", ""),
-                channels=cd.get("channels", ""),
-                search_sources=cd.get("search_sources", [])
-            )
+            if isinstance(cd, dict):
+                return CompetitorData(
+                    name=cd.get("name", ""),
+                    category=cd.get("category", ""),
+                    product_features=cd.get("product_features", ""),
+                    pricing_info=cd.get("pricing_info", ""),
+                    market_share=cd.get("market_share", ""),
+                    user_reviews=cd.get("user_reviews", ""),
+                    strengths=cd.get("strengths", ""),
+                    weaknesses=cd.get("weaknesses", ""),
+                    channels=cd.get("channels", ""),
+                    offers=cd.get("offers", []),
+                    contact_methods=cd.get("contact_methods", []),
+                    source_urls=cd.get("source_urls", []),
+                    evidence_notes=cd.get("evidence_notes", []),
+                    risk_flags=cd.get("risk_flags", []),
+                    search_sources=cd.get("search_sources", [])
+                )
         
         # 默认情况
         return CompetitorData(name="未知竞品")
@@ -214,16 +221,48 @@ class QualityCheckAgent(BaseAgent):
                 ))
                 score -= 0.15
                 self._log(f"   ⚠️  竞品[{cd.name}]采集字段缺失: {missing_fields}")
-            if len(cd.search_sources) < self.MIN_SOURCE_COUNT:
+            source_count = len(cd.search_sources) + len(cd.source_urls)
+            if source_count < self.MIN_SOURCE_COUNT:
                 issues.append(self._issue(
                     "source_insufficient",
                     "high",
-                    f"竞品[{cd.name}]来源数量不足，仅{len(cd.search_sources)}条",
+                    f"竞品[{cd.name}]来源数量不足，仅{source_count}条",
                     "collection",
-                    {"competitor": cd.name, "source_count": len(cd.search_sources)},
+                    {"competitor": cd.name, "source_count": source_count},
                 ))
                 score -= 0.1
                 self._log(f"   ⚠️  竞品[{cd.name}]来源不足")
+            profile = detect_scenario(f"{cd.category} {cd.product_features} {cd.pricing_info} {cd.channels}")
+            if profile.offer_dimensions and not cd.offers and self._is_blank(cd.pricing_info):
+                issues.append(self._issue(
+                    "offer_missing",
+                    "high",
+                    f"竞品[{cd.name}]缺少可比较报价/套餐信息",
+                    "collection",
+                    {"competitor": cd.name, "expected_offer_dimensions": list(profile.offer_dimensions)},
+                ))
+                score -= 0.12
+            if profile.scenario_id in {"service_package", "general"} and not cd.contact_methods and self._is_blank(cd.channels):
+                issues.append(self._issue(
+                    "contact_missing",
+                    "medium",
+                    f"竞品[{cd.name}]缺少报名/购买/咨询联系方式",
+                    "collection",
+                    {"competitor": cd.name},
+                ))
+                score -= 0.08
+            if cd.offers:
+                for offer in cd.offers[:3]:
+                    if not offer.get("price"):
+                        issues.append(self._issue(
+                            "offer_price_missing",
+                            "medium",
+                            f"竞品[{cd.name}]存在报价方案但价格字段缺失",
+                            "collection",
+                            {"competitor": cd.name, "offer": offer.get("name", "")},
+                        ))
+                        score -= 0.05
+                        break
 
         # ── 检查3: 产品分析完整性 ──
         product_analysis = to_product_analysis(state.get("product_analysis"))

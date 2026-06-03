@@ -43,6 +43,7 @@ class CompetitorList:
 class CompetitorData:
     """单个竞品的采集数据"""
     name: str                               # 竞品名称
+    category: str = ""                      # 可比较对象类别
     product_features: str = ""              # 产品功能描述
     pricing_info: str = ""                  # 定价信息
     market_share: str = ""                  # 市场份额
@@ -50,6 +51,11 @@ class CompetitorData:
     strengths: str = ""                     # 优势
     weaknesses: str = ""                    # 劣势
     channels: str = ""                      # 渠道策略
+    offers: list[dict] = field(default_factory=list)  # 报价/套餐/团购方案
+    contact_methods: list[str] = field(default_factory=list)  # 报名/销售/咨询方式
+    source_urls: list[str] = field(default_factory=list)  # 可跳转来源
+    evidence_notes: list[str] = field(default_factory=list)  # 支撑结论的证据摘要
+    risk_flags: list[str] = field(default_factory=list)  # 隐形消费/口碑/合规等风险
     search_sources: list[str] = field(default_factory=list)  # 搜索原文
 
 

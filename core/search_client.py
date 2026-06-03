@@ -122,3 +122,16 @@ class SearchClient:
                 texts.append(f"【{title}】{snippet}")
 
         return "\n".join(texts)
+
+    @staticmethod
+    def extract_urls(search_result: dict) -> list[str]:
+        """从搜索返回结构中提取可追溯URL。"""
+        if not search_result:
+            return []
+        urls = []
+        for sr in search_result.get("references", []):
+            for key in ("url", "link", "href"):
+                value = sr.get(key, "")
+                if value:
+                    urls.append(value)
+        return list(dict.fromkeys(urls))
