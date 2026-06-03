@@ -42,7 +42,7 @@ LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "doubao")
 # ========================
 # 豆包API配置（LLM_PROVIDER = "doubao" 时生效）
 # 模型: Doubao-Seed-2.0-lite
-# EP: ep-20260514111325-xjmj7
+# EP: 请在 .env 中配置 DOUBAO_MODEL
 # ========================
 DOUBAO_API_KEY = os.environ.get(
     "DOUBAO_API_KEY",
@@ -50,12 +50,15 @@ DOUBAO_API_KEY = os.environ.get(
 )
 DOUBAO_MODEL = os.environ.get(
     "DOUBAO_MODEL",
-    "ep-20260514111325-xjmj7",
+    "ep-your-endpoint-id",
 )
 DOUBAO_BASE_URL = os.environ.get(
     "DOUBAO_BASE_URL",
     "https://ark.cn-beijing.volces.com/api/v3",
 )
+LLM_HTTP_PROXY = os.environ.get("LLM_HTTP_PROXY", "")
+LLM_HTTPS_PROXY = os.environ.get("LLM_HTTPS_PROXY", "")
+LLM_VERIFY_SSL = os.environ.get("LLM_VERIFY_SSL", "true").lower() != "false"
 
 # ========================
 # 阿里云API配置（LLM_PROVIDER = "aliyun" 时生效）

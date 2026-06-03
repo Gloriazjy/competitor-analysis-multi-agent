@@ -3,3 +3,6 @@
 __pycache__/
 *.pyc
 .env
+output/
+test_*.py
+*_test.py

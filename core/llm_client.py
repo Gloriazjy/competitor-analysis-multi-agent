@@ -20,6 +20,26 @@ import time
 import config
 
 
+def _safe_error_text(text: str, limit: int = 300) -> str:
+    """限制错误文本长度，避免日志过长。"""
+    if not text:
+        return ""
+    return text.replace(config.DOUBAO_API_KEY, "***")[:limit]
+
+
+def _request_options() -> dict:
+    """统一构造 requests 选项，支持本地代理排障。"""
+    options = {"timeout": 120, "verify": config.LLM_VERIFY_SSL}
+    proxies = {}
+    if config.LLM_HTTP_PROXY:
+        proxies["http"] = config.LLM_HTTP_PROXY
+    if config.LLM_HTTPS_PROXY:
+        proxies["https"] = config.LLM_HTTPS_PROXY
+    if proxies:
+        options["proxies"] = proxies
+    return options
+
+
 # ============================
 # Access Token 缓存（千帆OAuth2方式）
 # ============================
@@ -65,8 +85,25 @@ def _call_openai_compat(
     for attempt in range(2):
         try:
             print(f"  [{provider_name}] [{agent_id}] 🔄 调用API (attempt {attempt+1})...")
-            resp = requests.post(api_url, headers=headers, json=payload, timeout=120)
-            result = resp.json()
+            resp = requests.post(api_url, headers=headers, json=payload, **_request_options())
+            try:
+                result = resp.json()
+            except ValueError:
+                print(
+                    f"  [{provider_name}] [{agent_id}] ❌ 非JSON响应 "
+                    f"(status={resp.status_code}): {_safe_error_text(resp.text)}"
+                )
+                return ""
+
+            if resp.status_code >= 400:
+                print(
+                    f"  [{provider_name}] [{agent_id}] ❌ HTTP错误 "
+                    f"(status={resp.status_code}): {_safe_error_text(json.dumps(result, ensure_ascii=False))}"
+                )
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                return ""
 
             if "error" in result:
                 error_msg = result["error"].get("message", str(result["error"]))
@@ -105,8 +142,11 @@ def _call_openai_compat(
             if attempt == 0:
                 continue
             return ""
-        except requests.exceptions.ConnectionError:
-            print(f"  [{provider_name}] [{agent_id}] ❌ 连接失败")
+        except requests.exceptions.SSLError as e:
+            print(f"  [{provider_name}] [{agent_id}] ❌ SSL/TLS失败: {_safe_error_text(str(e))}")
+            return ""
+        except requests.exceptions.ConnectionError as e:
+            print(f"  [{provider_name}] [{agent_id}] ❌ 连接失败: {_safe_error_text(str(e))}")
             return ""
         except Exception as e:
             print(f"  [{provider_name}] [{agent_id}] ❌ 异常: {e}")
