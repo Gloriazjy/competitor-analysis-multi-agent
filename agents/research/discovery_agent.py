@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-agents/discovery_agent.py — 竞品发现Agent
+agents/discovery_agent.py -- 竞品发现Agent
 
 职责：根据用户产品描述，搜索并筛选出3~8个核心竞品
 LLM调用：2次（关键词生成 + 结果筛选）
@@ -18,7 +18,7 @@ import json
 
 
 class DiscoveryAgent(BaseAgent):
-    """竞品发现Agent — 搜索并筛选核心竞品"""
+    """竞品发现Agent -- 搜索并筛选核心竞品"""
 
     def __init__(self):
         prompts = load_prompts("discovery_agent")
@@ -31,32 +31,46 @@ class DiscoveryAgent(BaseAgent):
         self.search_client = SearchClient()
 
     async def run(self, product_description: str,
-                  max_competitors: int = config.DEFAULT_COMPETITOR_COUNT) -> CompetitorList:
+                  max_competitors: int = config.DEFAULT_COMPETITOR_COUNT,
+                  quality_feedback: list[dict] = None) -> CompetitorList:
         """
-        主运行逻辑：生成搜索关键词 → 搜索 → 筛选竞品
+        主运行逻辑：生成搜索关键词 -> 搜索 -> 筛选竞品
 
         Args:
             product_description: 用户产品描述
             max_competitors: 最大竞品数量
+            quality_feedback: 质检打回的竞品发现问题
 
         Returns:
             CompetitorList: 发现的竞品列表
         """
         self._log(f"🔍 开始发现竞品: {product_description[:50]}...")
+        
+        needs_more_competitors = False
+        if quality_feedback:
+            self._log(f"   收到质检反馈: {len(quality_feedback)}条")
+            for feedback in quality_feedback:
+                issue_type = feedback.get("type", "")
+                if issue_type in ["competitor_list_empty", "competitor_count_low"]:
+                    needs_more_competitors = True
+                    self._log(f"   🔄 检测到竞品数量问题，将增加搜索力度")
+                    break
+            
         profile = detect_scenario(product_description)
         self._log(f"   识别场景: {profile.category}")
 
-        # ── 步骤1: 生成搜索关键词 ──
-        keywords = self._generate_keywords(product_description)
+        # --- 步骤1: 生成搜索关键词 ---
+        keywords = self._generate_keywords(product_description, needs_more_competitors)
         self._log(f"   生成搜索关键词: {keywords}")
 
-        # ── 步骤2: 执行搜索 ──
-        search_results = self._search(keywords)
+        # --- 步骤2: 执行搜索 ---
+        search_results = self._search(keywords, needs_more_competitors)
         self._log(f"   搜索完成，获得{len(search_results)}组结果")
 
-        # ── 步骤3: 筛选竞品 ──
+        # --- 步骤3: 筛选竞品 ---
+        target_count = max_competitors + 2 if needs_more_competitors else max_competitors
         competitor_list = self._filter_competitors(
-            product_description, search_results, max_competitors
+            product_description, search_results, target_count
         )
 
         self._log(f"✅ 发现{len(competitor_list.competitors)}个核心竞品")
@@ -65,25 +79,24 @@ class DiscoveryAgent(BaseAgent):
 
         return competitor_list
 
-    def _generate_keywords(self, product_description: str) -> list[str]:
+    def _generate_keywords(self, product_description: str, needs_more: bool = False) -> list[str]:
         """生成搜索关键词（LLM + 规则引擎降级）"""
         if config.ENABLE_LLM:
             prompt = self._prompt_keywords.format(
                 product_description=product_description,
-                count=5,
+                count=8 if needs_more else 5,
             )
             result = self.ask_llm_json(prompt)
             if result and "keywords" in result:
                 keywords = result["keywords"]
                 self._log(f"   LLM生成关键词: {keywords}")
-                return keywords[:8]  # 最多8组关键词
+                return keywords[:10] if needs_more else keywords[:8]
             else:
                 self._log("   LLM关键词生成失败，降级到规则引擎")
 
-        # Fallback: 规则引擎生成关键词
-        return self._rule_keywords(product_description)
+        return self._rule_keywords(product_description, needs_more)
 
-    def _rule_keywords(self, product_description: str) -> list[str]:
+    def _rule_keywords(self, product_description: str, needs_more: bool = False) -> list[str]:
         """规则引擎生成搜索关键词"""
         name = infer_product_name(product_description)
         profile = detect_scenario(product_description)
@@ -92,22 +105,29 @@ class DiscoveryAgent(BaseAgent):
             f"{name}替代产品",
             f"{name}同类产品对比",
             f"类似{name}的产品",
+            f"{name}竞争对手",
+            f"{name}市场份额",
         ]
-        for modifier in profile.search_modifiers[:4]:
+        for modifier in profile.search_modifiers[:6] if needs_more else profile.search_modifiers[:4]:
             keywords.append(f"{name} {modifier}")
         keywords.append(f"{profile.category} 主流产品 排名")
-        return list(dict.fromkeys(keywords))[:8]
+        keywords.append(f"{profile.category} 品牌排行榜")
+        return list(dict.fromkeys(keywords))[:10] if needs_more else list(dict.fromkeys(keywords))[:8]
 
-    def _search(self, keywords: list[str]) -> list[dict]:
+    def _search(self, keywords: list[str], needs_more: bool = False) -> list[dict]:
         """执行搜索"""
         results = self.search_client.batch_search(keywords)
+        if needs_more and len(results) < len(keywords):
+            self._log("   搜索结果不足，补充搜索...")
+            additional_keywords = [f"{k} 官网" for k in keywords[:3]]
+            additional_results = self.search_client.batch_search(additional_keywords)
+            results.extend(additional_results)
         return results
 
     def _filter_competitors(self, product_description: str,
                             search_results: list[dict],
                             max_competitors: int) -> CompetitorList:
         """筛选核心竞品（LLM + 规则引擎降级）"""
-        # 提取搜索文本
         all_text = ""
         for sr in search_results:
             query = sr.get("query", "")
@@ -119,7 +139,7 @@ class DiscoveryAgent(BaseAgent):
         if config.ENABLE_LLM and all_text:
             prompt = self._prompt_filter.format(
                 product_description=product_description,
-                search_results=all_text[:6000],  # 限制长度
+                search_results=all_text[:8000] if len(all_text) > 6000 else all_text[:6000],
                 max_competitors=max_competitors,
             )
             result = self.ask_llm_json(prompt, max_tokens=4096)
@@ -140,7 +160,6 @@ class DiscoveryAgent(BaseAgent):
             else:
                 self._log("   LLM筛选失败，降级到规则引擎")
 
-        # Fallback: 规则引擎筛选
         return self._rule_filter(product_description, search_results, max_competitors)
 
     def _rule_filter(self, product_description: str,
@@ -154,10 +173,10 @@ class DiscoveryAgent(BaseAgent):
         seen_names.add(product_name)
         profile = detect_scenario(product_description)
 
-        # 首先使用场景画像兜底，保证无搜索结果时也能覆盖多行业演示
         if profile.competitor_candidates:
             self._log(f"   📚 匹配场景库: {profile.category}")
-            for name in profile.competitor_candidates[:max_competitors]:
+            candidate_count = max_competitors + 2 if len(profile.competitor_candidates) > max_competitors else max_competitors
+            for name in profile.competitor_candidates[:candidate_count]:
                 if name not in seen_names:
                     seen_names.add(name)
                     competitors.append(CompetitorInfo(
@@ -166,9 +185,8 @@ class DiscoveryAgent(BaseAgent):
                         relevance="HIGH",
                     ))
 
-        # 如果领域库没匹配到，尝试从搜索结果提取产品名
-        if not competitors:
-            self._log("   未匹配领域库，从搜索结果提取...")
+        if len(competitors) < max_competitors:
+            self._log("   从搜索结果补充提取...")
             for sr in search_results:
                 result = sr.get("result")
                 if not result:
@@ -177,7 +195,6 @@ class DiscoveryAgent(BaseAgent):
                 if not text:
                     continue
 
-                # 查找《》或「」中的名称，或常见的产品名格式
                 name_patterns = re.findall(r'[《「]([^」》]+)[」》]', text)
                 for name in name_patterns:
                     name = name.strip()
@@ -193,7 +210,6 @@ class DiscoveryAgent(BaseAgent):
                 if len(competitors) >= max_competitors:
                     break
 
-        # 兜底：生成通用竞品示例
         if not competitors:
             self._log("   ⚠️ 未发现竞品，使用通用模式生成")
             for i in range(1, max_competitors + 1):
@@ -207,6 +223,6 @@ class DiscoveryAgent(BaseAgent):
         return CompetitorList(
             product_name=product_name,
             product_category=profile.category,
-            competitors=competitors,
+            competitors=competitors[:max_competitors],
             search_keywords_used=[sr.get("query", "") for sr in search_results],
         )
