@@ -61,6 +61,20 @@ LLM_HTTPS_PROXY = os.environ.get("LLM_HTTPS_PROXY", "")
 LLM_VERIFY_SSL = os.environ.get("LLM_VERIFY_SSL", "true").lower() != "false"
 
 # ========================
+# LangSmith 可观测追踪（不是评测评分项）
+# ========================
+LANGSMITH_TRACING = os.environ.get(
+    "LANGSMITH_TRACING",
+    os.environ.get("LANGCHAIN_TRACING_V2", "false"),
+).lower() == "true"
+LANGSMITH_API_KEY = os.environ.get(
+    "LANGSMITH_API_KEY",
+    os.environ.get("LANGCHAIN_API_KEY", ""),
+)
+LANGSMITH_PROJECT = os.environ.get("LANGSMITH_PROJECT", "competitor-analysis-agent")
+LANGSMITH_ENDPOINT = os.environ.get("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+
+# ========================
 # 阿里云API配置（LLM_PROVIDER = "aliyun" 时生效）
 # ========================
 ALI_API_KEY = os.environ.get(
@@ -119,6 +133,9 @@ BAIDU_SEARCH_RECENCY = os.environ.get("BAIDU_SEARCH_RECENCY", "month")
 
 # 搜索间隔（秒），避免限流
 SEARCH_DELAY_SECONDS = float(os.environ.get("SEARCH_DELAY_SECONDS", "2.0"))
+SEARCH_CONCURRENCY = int(os.environ.get("SEARCH_CONCURRENCY", "5"))
+SEARCH_STAGGER_SECONDS = float(os.environ.get("SEARCH_STAGGER_SECONDS", "0.2"))
+COLLECTION_COMPETITOR_CONCURRENCY = int(os.environ.get("COLLECTION_COMPETITOR_CONCURRENCY", "2"))
 
 # ========================
 # 系统模式配置
@@ -160,4 +177,3 @@ GATEWAY_SWITCH_OVERHEAD_MS = int(os.environ.get("GATEWAY_SWITCH_OVERHEAD_MS", "5
 # 自定义降级链路（逗号分隔，优先级从高到低）
 # 例如: "doubao,aliyun,qianfan,openai,ollama"
 GATEWAY_FALLBACK_CHAIN = os.environ.get("GATEWAY_FALLBACK_CHAIN", "")
-

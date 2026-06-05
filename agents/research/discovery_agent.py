@@ -45,7 +45,7 @@ class DiscoveryAgent(BaseAgent):
             CompetitorList: 发现的竞品列表
         """
         self._log(f"🔍 开始发现竞品: {product_description[:50]}...")
-        
+
         needs_more_competitors = False
         if quality_feedback:
             self._log(f"   收到质检反馈: {len(quality_feedback)}条")
@@ -55,7 +55,7 @@ class DiscoveryAgent(BaseAgent):
                     needs_more_competitors = True
                     self._log(f"   🔄 检测到竞品数量问题，将增加搜索力度")
                     break
-            
+
         profile = detect_scenario(product_description)
         self._log(f"   识别场景: {profile.category}")
 
@@ -64,7 +64,7 @@ class DiscoveryAgent(BaseAgent):
         self._log(f"   生成搜索关键词: {keywords}")
 
         # --- 步骤2: 执行搜索 ---
-        search_results = self._search(keywords, needs_more_competitors)
+        search_results = await self._search(keywords, needs_more_competitors)
         self._log(f"   搜索完成，获得{len(search_results)}组结果")
 
         # --- 步骤3: 筛选竞品 ---
@@ -114,13 +114,13 @@ class DiscoveryAgent(BaseAgent):
         keywords.append(f"{profile.category} 品牌排行榜")
         return list(dict.fromkeys(keywords))[:10] if needs_more else list(dict.fromkeys(keywords))[:8]
 
-    def _search(self, keywords: list[str], needs_more: bool = False) -> list[dict]:
+    async def _search(self, keywords: list[str], needs_more: bool = False) -> list[dict]:
         """执行搜索"""
-        results = self.search_client.batch_search(keywords)
+        results = await self.search_client.batch_search_async(keywords)
         if needs_more and len(results) < len(keywords):
             self._log("   搜索结果不足，补充搜索...")
             additional_keywords = [f"{k} 官网" for k in keywords[:3]]
-            additional_results = self.search_client.batch_search(additional_keywords)
+            additional_results = await self.search_client.batch_search_async(additional_keywords)
             results.extend(additional_results)
         return results
 

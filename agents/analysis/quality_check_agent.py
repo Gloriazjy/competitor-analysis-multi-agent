@@ -8,38 +8,51 @@ agents/quality_check_agent.py — 质检Agent
 
 from agents.base_agent import BaseAgent
 from core.graph_state import GraphState
+from core.prompt_loader import load as load_prompts
 from core.type_utils import (
     to_product_analysis,
     to_pricing_analysis,
     to_market_analysis,
 )
 from core.scenario_profile import detect_scenario
+import config
 import time
 
 
 class QualityCheckAgent(BaseAgent):
-    """数据与分析质量审核Agent"""
+    """数据与分析质量审核Agent
+
+    双层质检：
+      第1层 规则引擎：结构完整性（字段/来源/数量），零成本快速过滤。
+      第2层 LLM事实核查：把采集原文与分析结论一起交给LLM，识别幻觉/编造/矛盾，
+                          产出"无信源支撑"类问题并据此打回。LLM不可用时自动跳过，
+                          只用第1层，不影响原流程。
+    """
 
     MIN_SOURCE_COUNT = 2
     MIN_COMPETITOR_COUNT = 3
     MIN_FEATURE_COUNT = 3
     MIN_PRICING_ITEM_COUNT = 2
     MIN_MARKET_ITEM_COUNT = 2
+    # 事实核查得分低于此阈值视为"分析脱离材料"，强制打回
+    FACTUAL_FAIL_THRESHOLD = 0.6
 
     def __init__(self):
+        prompts = load_prompts("quality_check_agent")
         super().__init__(
             agent_id="QualityCheckAgent",
-            system_prompt="",
+            system_prompt=prompts["system_prompt"],
         )
+        self._prompt_fact_check = prompts["prompt_fact_check"]
 
     def _safe_convert_competitor_data(self, cd):
         """安全转换：如果LangGraph把dataclass变成dict或字符串，就转回来"""
         from models.domain import CompetitorData
-        
+
         # 情况1: 已经是 CompetitorData 对象
         if isinstance(cd, CompetitorData):
             return cd
-        
+
         # 情况2: 字符串形式（LangGraph序列化可能把dict变成字符串）
         if isinstance(cd, str):
             cd = cd.strip()
@@ -54,7 +67,7 @@ class QualityCheckAgent(BaseAgent):
             else:
                 # 纯字符串可能是竞品名
                 return CompetitorData(name=cd)
-        
+
         # 情况3: 字典形式
         if isinstance(cd, dict):
             return CompetitorData(
@@ -75,9 +88,17 @@ class QualityCheckAgent(BaseAgent):
                 search_sources=cd.get("search_sources", []),
                 field_status=cd.get("field_status", {})
             )
-        
+
         # 默认情况
         return CompetitorData(name="未知竞品")
+
+    def _normalize_competitor_data_list(self, raw_data) -> list:
+        """兼容采集接口的 dict 输出和 LangGraph 序列化后的 list 输出。"""
+        if isinstance(raw_data, dict):
+            raw_items = raw_data.values()
+        else:
+            raw_items = raw_data or []
+        return [self._safe_convert_competitor_data(cd) for cd in raw_items]
 
     def _safe_convert_competitor_list(self, cl):
         if isinstance(cl, dict):
@@ -133,6 +154,13 @@ class QualityCheckAgent(BaseAgent):
         """按最高影响面选择一个回退目标：发现 > 采集 > 分析。"""
         if not issues:
             return ""
+        for issue in issues:
+            if issue.get("severity") == "critical" and issue.get("rollback_to") == "discovery":
+                return "discovery"
+        factual_types = {"unsupported_claim", "contradiction", "fabricated_data", "factual_score_low"}
+        for issue in issues:
+            if issue.get("severity") == "high" and issue.get("type") in factual_types:
+                return "parallel_analysis"
         priority = {
             "discovery": 0,
             "collection": 1,
@@ -168,7 +196,7 @@ class QualityCheckAgent(BaseAgent):
     async def run(self, state: GraphState) -> dict:
         """
         执行质量质检
-        
+
         返回质量报告，决定是否继续往下走还是回退重做
         """
         self._log("🔍 开始执行全流程质量检测...")
@@ -204,7 +232,7 @@ class QualityCheckAgent(BaseAgent):
 
         # ── 检查2: 数据采集完整性 ──
         competitors_data_raw = state.get("competitors_data") or []
-        competitors_data = [self._safe_convert_competitor_data(cd) for cd in competitors_data_raw]
+        competitors_data = self._normalize_competitor_data_list(competitors_data_raw)
         expected_count = len(competitor_list.competitors) if competitor_list else 0
         if expected_count and len(competitors_data) < expected_count:
             issues.append(self._issue(
@@ -353,51 +381,205 @@ class QualityCheckAgent(BaseAgent):
         else:
             self._log(f"   ✅ 市场分析OK: {len(market_analysis.market_share_data)}个市场数据")
 
-        # ── 检查6: 简单证据覆盖，避免分析结论脱离采集材料 ──
+        # ── 第2层: LLM事实核查（识别幻觉/编造/矛盾）──
+        # 把采集原文与分析结论一起交给LLM判断"结论是否被原文支撑"。
+        # 这是真正的事实依据打回，区别于第1层的"字段是否为空"。
         source_text = "\n".join(
-            f"{cd.name} {cd.product_features} {cd.pricing_info} {cd.market_share} "
-            f"{cd.user_reviews} {cd.strengths} {cd.weaknesses} {cd.channels}"
+            f"### {cd.name}\n"
+            f"产品功能: {cd.product_features}\n定价: {cd.pricing_info}\n"
+            f"市场: {cd.market_share}\n用户评价: {cd.user_reviews}\n"
+            f"优势: {cd.strengths}\n劣势: {cd.weaknesses}\n渠道: {cd.channels}"
             for cd in competitors_data
         )
-        if product_analysis and product_analysis.differentiation_points:
-            unsupported = [
-                point for point in product_analysis.differentiation_points[:5]
-                if not self._contains_any(source_text, [point])
-            ]
-            if len(unsupported) >= 3:
+        factual_score = 1.0
+        if config.ENABLE_LLM and competitors_data:
+            factual_score, llm_issues = self._llm_fact_check(
+                source_text, product_analysis, pricing_analysis, market_analysis
+            )
+            if llm_issues:
+                issues.extend(llm_issues)
+            # 事实分按权重并入总分（材料脱节比字段缺失更严重）
+            score = min(score, 0.4 + 0.6 * factual_score)
+            if factual_score < self.FACTUAL_FAIL_THRESHOLD:
                 issues.append(self._issue(
-                    "product_claim_unsupported",
-                    "medium",
-                    "产品差异化结论缺少采集材料支撑",
-                    "product_analysis",
-                    {"unsupported_points": unsupported},
+                    "factual_score_low",
+                    "high",
+                    f"事实核查得分过低({factual_score:.2f})，分析结论整体缺少采集材料支撑",
+                    "parallel_analysis",
+                    {"factual_score": factual_score, "threshold": self.FACTUAL_FAIL_THRESHOLD},
                 ))
-                score -= 0.1
+            self._log(f"   🔬 LLM事实核查得分: {factual_score:.2f}（已并入总分）")
+        else:
+            # LLM不可用时降级到原有的简易子串覆盖检查
+            if product_analysis and product_analysis.differentiation_points:
+                unsupported = [
+                    point for point in product_analysis.differentiation_points[:5]
+                    if not self._contains_any(source_text, [point])
+                ]
+                if len(unsupported) >= 3:
+                    issues.append(self._issue(
+                        "product_claim_unsupported",
+                        "medium",
+                        "产品差异化结论缺少采集材料支撑",
+                        "product_analysis",
+                        {"unsupported_points": unsupported},
+                    ))
+                    score -= 0.1
 
         # ── 最终判定 ──
         score = max(0.0, min(1.0, score))
-        passed = score >= 0.7 or (state.get("retry_count", 0) >= state.get("max_retries", 2))
-        retry_count = state.get("retry_count", 0) + 1
+        retry_count_before = state.get("retry_count", 0)
+        max_retries = state.get("max_retries", 2)
+        has_high_factual_issue = any(
+            issue.get("severity") == "high"
+            and issue.get("type") in {
+                "unsupported_claim",
+                "contradiction",
+                "fabricated_data",
+                "factual_score_low",
+            }
+            for issue in issues
+        )
+        # 通过条件：得分达标且无高危事实问题；或已用尽重试次数（强制降级通过）
+        retries_exhausted = retry_count_before >= max_retries
+        quality_ok = score >= 0.7 and not has_high_factual_issue
+        passed = quality_ok or retries_exhausted
+        forced = passed and not quality_ok and retries_exhausted
+        retry_count = retry_count_before + 1
         rollback_target = "" if passed else self._select_rollback_target(issues)
         quality_feedback = [] if passed else self._build_feedback(issues, rollback_target)
 
-        self._log(
-            f"📊 质检完成: 得分 {score:.2f} / 1.0, 通过={passed}, "
-            f"回退目标={rollback_target or '无'}, 重试次数={retry_count}"
-        )
+        if forced:
+            self._log(
+                f"📊 质检完成: 得分 {score:.2f} / 1.0, 已达最大重试{max_retries}次 → "
+                f"强制通过并标注置信度，问题数={len(issues)}"
+            )
+        else:
+            self._log(
+                f"📊 质检完成: 得分 {score:.2f} / 1.0, 通过={passed}, "
+                f"回退目标={rollback_target or '无'}, 重试次数={retry_count}"
+            )
+
+        decision_log = {
+            "step": "quality_check",
+            "decision": "pass" if passed else "rollback",
+            "rollback_target": rollback_target,
+            "reason": self._build_decision_reason(score, factual_score, issues, forced),
+            "issues": [issue.get("type", "") for issue in issues[:8]],
+            "retry_count": retry_count,
+            "forced_pass": forced,
+        }
 
         return {
             "quality_check_passed": passed,
             "quality_score": score,
+            "factual_score": factual_score,
+            "quality_forced_pass": forced,
             "issues_found": issues,
             "rollback_target": rollback_target,
             "quality_feedback": quality_feedback,
             "retry_count": retry_count,
+            "decision_logs": [decision_log],
             "execution_logs": [{
                 "agent": "QualityCheckAgent",
                 "timestamp": time.time(),
                 "score": score,
+                "factual_score": factual_score,
                 "passed": passed,
+                "forced_pass": forced,
                 "issue_count": len(issues)
             }]
         }
+
+    @staticmethod
+    def _build_decision_reason(score: float, factual_score: float,
+                               issues: list[dict], forced: bool) -> str:
+        if forced:
+            return "达到最大重试次数，保留问题并降级通过"
+        if score >= 0.7 and factual_score >= 0.7:
+            unavailable = [
+                issue.get("type", "")
+                for issue in issues
+                if "unavailable" in issue.get("type", "")
+            ]
+            if unavailable:
+                return "公开不可得字段已标注，不再重复回采"
+            return "质量分和事实核查均达标"
+        high = [issue.get("type", "") for issue in issues if issue.get("severity") in {"critical", "high"}]
+        return "存在需回退处理的问题: " + "、".join(high[:3])
+
+    def _llm_fact_check(self, source_text, product_analysis,
+                        pricing_analysis, market_analysis) -> tuple[float, list[dict]]:
+        """第2层：调用LLM核查分析结论是否被采集原文支撑。
+
+        返回 (事实得分, 问题清单)。LLM失败时返回(1.0, [])不影响主流程。
+        """
+        claims_text = self._build_claims_text(
+            product_analysis, pricing_analysis, market_analysis
+        )
+        if not claims_text.strip():
+            return 1.0, []
+
+        prompt = self._prompt_fact_check.format(
+            evidence_text=source_text[:8000],
+            claims_text=claims_text[:4000],
+        )
+        result = self.ask_llm_json(prompt, temperature=0.0, max_tokens=2048)
+        if not result:
+            self._log("   ⚠️ LLM事实核查无返回，跳过第2层（仅用规则层）")
+            return 1.0, []
+
+        factual_score = result.get("overall_factual_score", 1.0)
+        try:
+            factual_score = max(0.0, min(1.0, float(factual_score)))
+        except (TypeError, ValueError):
+            factual_score = 1.0
+
+        target_map = {
+            "product_analysis": "product_analysis",
+            "pricing_analysis": "pricing_analysis",
+            "market_analysis": "market_analysis",
+            "collection": "collection",
+        }
+        issues = []
+        for item in result.get("issues", []):
+            if not isinstance(item, dict):
+                continue
+            issue_type = item.get("type", "unsupported_claim")
+            severity = item.get("severity", "medium")
+            target = target_map.get(item.get("target", ""), "parallel_analysis")
+            claim = str(item.get("claim", ""))[:120]
+            reason = str(item.get("reason", ""))[:200]
+            issues.append(self._issue(
+                issue_type,
+                severity,
+                f"事实核查: {reason}（涉及结论: {claim}）",
+                target,
+                {"claim": claim, "reason": reason, "source": "llm_fact_check"},
+            ))
+            self._log(f"   🚩 [{severity}] {issue_type}: {claim[:40]}")
+        return factual_score, issues
+
+    @staticmethod
+    def _build_claims_text(product_analysis, pricing_analysis, market_analysis) -> str:
+        """把三维分析的关键结论汇总成待核查文本。"""
+        lines = []
+        if product_analysis:
+            if product_analysis.differentiation_points:
+                lines.append("【产品-差异化结论】")
+                lines.extend(f"- {p}" for p in product_analysis.differentiation_points[:6])
+            for adv in (product_analysis.competitive_advantages or [])[:5]:
+                lines.append(f"- 对比{adv.competitor}: 我方优势={adv.our_advantage}; 对方优势={adv.their_advantage}")
+            if product_analysis.summary:
+                lines.append(f"【产品分析摘要】{product_analysis.summary}")
+        if pricing_analysis:
+            for pc in (pricing_analysis.pricing_comparison or [])[:6]:
+                lines.append(f"【定价】{pc.competitor}: 免费={pc.free_tier}; 付费={pc.paid_tier}; 模式={pc.pricing_model}")
+            if pricing_analysis.pricing_strategy_analysis:
+                lines.append(f"【定价策略】{pricing_analysis.pricing_strategy_analysis}")
+        if market_analysis:
+            for ms in (market_analysis.market_share_data or [])[:6]:
+                lines.append(f"【市场份额】{ms.competitor}: 估算={ms.share_estimate}; 趋势={ms.trend}")
+            if market_analysis.growth_trends:
+                lines.append(f"【市场趋势】{market_analysis.growth_trends}")
+        return "\n".join(lines)

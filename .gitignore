@@ -6,3 +6,5 @@ __pycache__/
 output/
 test_*.py
 *_test.py
+eval/eval_result.json
+eval/eval_run_llm.txt

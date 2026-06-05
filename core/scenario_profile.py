@@ -147,7 +147,11 @@ DEFAULT_PROFILE = ScenarioProfile(
 
 
 def detect_scenario(product_description: str) -> ScenarioProfile:
-    """根据产品描述匹配最相关的场景画像。"""
+    """根据产品描述匹配最相关的场景画像。
+
+    匹配优先级：关键词命中 > 竞品候选名命中。
+    竞品名命中权重略低，避免与关键词强信号冲突。
+    """
     text = product_description.lower()
     best_profile = DEFAULT_PROFILE
     best_score = 0
@@ -156,6 +160,12 @@ def detect_scenario(product_description: str) -> ScenarioProfile:
             10 + len(keyword)
             for keyword in profile.keywords
             if keyword.lower() in text
+        )
+        # 产品描述里直接出现某场景的知名竞品名，也是强场景信号
+        score += sum(
+            8
+            for candidate in profile.competitor_candidates
+            if candidate and candidate.lower() in text
         )
         if score > best_score:
             best_score = score

@@ -1,0 +1,41 @@
+{
+  "description": "竞品分析多Agent系统评测集，覆盖多行业场景，用于回归与答辩实验结果",
+  "version": "1.0",
+  "cases": [
+    {
+      "id": "saas_notion",
+      "product": "Notion",
+      "scenario_expected": "enterprise_saas",
+      "max_competitors": 4,
+      "note": "企业协作SaaS，竞品丰富、公开信息多，考察功能矩阵与定价对比"
+    },
+    {
+      "id": "edu_xiaodu",
+      "product": "小度学习机",
+      "scenario_expected": "education_hardware",
+      "max_competitors": 4,
+      "note": "教育硬件，命中场景预设库，考察硬件参数与课程订阅维度"
+    },
+    {
+      "id": "hardware_phone",
+      "product": "小米手机",
+      "scenario_expected": "hardware_device",
+      "max_competitors": 4,
+      "note": "消费电子，参数/销量信息密集，考察市场份额替代指标"
+    },
+    {
+      "id": "service_travel",
+      "product": "青甘大环线旅游团",
+      "scenario_expected": "service_package",
+      "max_competitors": 4,
+      "note": "服务套餐，价格口径不一、隐形消费风险，考察报价抽取与风险标注"
+    },
+    {
+      "id": "app_xiaohongshu",
+      "product": "小红书",
+      "scenario_expected": "consumer_app",
+      "max_competitors": 4,
+      "note": "消费级App，口碑/下载量为主，考察用户口碑与防刷量编造"
+    }
+  ]
+}

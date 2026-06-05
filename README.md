@@ -4,13 +4,15 @@
 
 ---
 
-## 🚀 新特性 (v2.0)
+## 🚀 新特性 (v2.1)
 
-- ✅ **LangGraph 编排引擎**：支持带动态循环的 DAG 工作流
-- 🔄 **质检自动回退**：质检Agent检测数据质量，不合格自动打回重做
-- 🎯 **5种LLM后端支持**：豆包、阿里云、百度千帆、OpenAI、Ollama
-- 📊 **LangSmith 全链路追踪**：一键启用可视化追踪
-- 🎨 **DAG流程图自动生成**：自动保存Mermaid图到output目录
+- ✅ **LangGraph 编排引擎**：带动态循环的 DAG 工作流
+- 🔬 **双层质检 + 真打回闭环**：规则层查"字段完整性" + LLM事实核查层查"结论是否被原文支撑"，识别幻觉/编造/矛盾并据此打回重做
+- 🤝 **Agent 自由协作**：分析Agent发现信息不足时，可主动回退到采集Agent补数据，而非只走固定流程
+- 🎯 **多LLM后端支持**：豆包（默认，对接大赛模型资源）、阿里云、百度千帆、OpenAI、Ollama 可一键切换
+- 📊 **三层可观测与评测组合**：LangSmith 看过程 Trace，Eval 脚本算质量指标，decision_logs 记录关键决策依据
+- 🧪 **评测集**：`eval/` 目录提供多行业测试用例与评测脚本，输出可量化实验结果
+- 🎨 **DAG流程图自动生成**：自动保存到 output 目录
 
 ---
 
@@ -24,34 +26,29 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                      LangGraph 动态DAG工作流                                 │
 │                                                                             │
-│  ┌──────────────────┐                                                        │
-│  │  竞品发现Agent   │ →  生成初始列表                                       │
-│  └───────┬──────────┘                                                        │
-│          ↓                                                                 │
-│  ┌──────────────────┐                                                        │
-│  │  数据采集Agent   │ →  逐竞品深度采集                                       │
-│  └───────┬──────────┘                                                        │
-│          ↓                                                                 │
-│  ┌──────────────────────────────────────┐                                   │
-│  │  三维并行分析 (asyncio.gather)        │                                   │
-│  │  ├ 产品分析  ┊ 定价分析  ┊ 市场分析 │                                   │
-│  └───────┬──────────────────────────────┘                                   │
-│          ↓                                                                 │
-│  ┌─────────────────────────────────────────────┐                          │
-│  │  🧐  质检Agent (QualityCheckAgent)          │←───┐                     │
-│  │  → 质量打分 0.0~1.0                          │     │                     │
-│  └───────┬─────────────────────────────────────┘     │                     │
-│          │ (通过?  得分 >=0.7 或 达到最大重试)        │                     │
-│          ↓ No →────────────────────────────────────┘  回退重做            │
-│    打回采集 & 重分析                                                     │
-│          ↓ Yes                                                            │
-│  ┌──────────────────┐                                                        │
-│  │  策略生成Agent   │ → 最终报告输出                                          │
-│  └──────────────────┘                                                        │
+│   START → 竞品发现 → 数据采集 ←──────────┐                                  │
+│                         ↓                 │ 分析Agent主动补采请求            │
+│              ┌────────────────────────┐   │                                  │
+│              │  三维并行分析           │───┘ (信息不足时回退采集)            │
+│              │  产品 ┊ 定价 ┊ 市场     │                                     │
+│              └───────────┬────────────┘                                     │
+│                          ↓ (信息充分)                                       │
+│              ┌────────────────────────────────┐                            │
+│              │  🔬 双层质检 QualityCheckAgent │←────┐                       │
+│              │  L1 规则: 字段/来源完整性       │     │                       │
+│              │  L2 LLM : 结论是否被原文支撑     │     │ 质检打回重做          │
+│              └───────────┬────────────────────┘     │ (发现>采集>分析)      │
+│                          │ 不通过 ──────────────────┘                       │
+│                          ↓ 通过                                             │
+│                   策略生成 → 报告输出 → END                                 │
 │                                                                             │
-│  LLM后端支持: 豆包  阿里云  百度千帆  OpenAI  Ollama                        │
+│  LLM后端: 豆包(默认) ┊ 阿里云 ┊ 百度千帆 ┊ OpenAI ┊ Ollama                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+**双重反馈闭环**：
+1. **分析主动协作**：分析Agent判断采集材料不足 → 主动回退采集补数据
+2. **质检事实打回**：质检发现结论缺原文支撑/编造 → 打回对应Agent重做
 
 **协作模式**：LangGraph 状态机 + 动态循环 混合模式
 
@@ -104,15 +101,19 @@
 - **输出**：MarketAnalysis
 - **降级策略**：基于采集数据中的关键词统计
 
-### 6. 质量检测Agent（QualityCheckAgent）⭐ 新增
-- **职责**：全链路数据质量审核，识别问题并打回重做
-- **LLM调用**：0次（纯规则引擎，快速）
+### 6. 质量检测Agent（QualityCheckAgent）⭐ 双层质检
+- **职责**：全链路质量审核，识别问题并打回重做
+- **第1层 规则引擎**（0次LLM，快速）：检查字段完整性、来源数量、竞品/特征/定价/市场数据是否达标
+- **第2层 LLM事实核查**（1次LLM）：把"采集原文"与"分析结论"一起交给LLM，识别原文中不存在的编造功能/价格/市场份额/评分，输出 `unsupported_claim`/`contradiction`/`fabricated_data` 三类问题
 - **输入**：所有中间数据
-- **输出**：质量报告（得分、问题列表、重试计数）
+- **输出**：质量报告（综合得分、事实得分、问题列表、回退目标、重试计数）
 - **判定逻辑**：
-  - 数据质量得分 >=0.7 → 通过
-  - 得分 <0.7 → 回退重做
-  - 达到max_retries → 强制通过，继续生成报告
+  - 得分 ≥0.7、事实核查分 ≥0.6 且无 high 级事实问题 → 通过
+  - 否则 → 选择影响面最大的目标回退重做（发现 > 采集 > 分析）
+  - 达到 max_retries → 强制降级通过，并在报告中标注置信度偏低
+
+### 🤝 Agent 自由协作（动态路由）
+除固定流程与质检回退外，**分析Agent可主动发起协作**：当三维分析发现过半竞品缺关键维度（产品功能/定价）时，自动生成补采清单回退到采集Agent，补齐后再继续分析。由独立计数器 `max_analysis_rollback` 控制，避免无限循环。
 
 ### 7. 策略建议Agent（StrategyAgent）
 - **职责**：综合三维分析，输出差异化定位建议和行动方案
@@ -150,60 +151,98 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
-### 运行方式（LangGraph版本）
+### 运行方式
 
 ```bash
-# 规则引擎模式（零依赖，直接体验动态质检循环）
-python main_graph.py --rule "小度学习机"
+# 默认模式（启用豆包LLM + 双层质检 + 动态回退）
+python main.py "小度学习机"
 
-# 豆包模式（默认，启用LLM）
-python main_graph.py "小度学习机"
+# 规则引擎模式（不调用LLM，快速体验流程）
+python main.py --rule "小度学习机"
 
 # 指定阿里云后端
 set LLM_PROVIDER=aliyun
-python main_graph.py "小度学习机"
+python main.py "小度学习机"
 
 # 启用 LangSmith 全链路追踪
 set LANGCHAIN_TRACING_V2=true
 set LANGCHAIN_API_KEY=你的key
-python main_graph.py "小度学习机"
+python main.py "小度学习机"
 ```
+
+### 运行评测集（生成实验结果）
+
+```bash
+# 跑全部用例（LLM模式）
+python eval/run_eval.py
+
+# 规则引擎模式（快速、零API消耗）
+python eval/run_eval.py --rule
+
+# 只跑指定用例 / 限制数量
+python eval/run_eval.py --case saas_notion
+python eval/run_eval.py --limit 2
+```
+
+评测结果输出到 `eval/eval_result.json`，包含场景命中率、平均来源数、字段完整率、字段可解释率、质检得分、事实核查得分、重做次数、耗时等指标。
+
+### Agent 评估与可观测分工
+
+本项目不把“固定路径轨迹”作为核心评分项，因为动态回退、自评补采和质检打回本来就会让不同输入走不同路径。更合理的组合是：
+
+- **LangSmith Trace**：记录 Agent/工具调用、输入输出、耗时、Token、报错，用于调试和答辩展示。
+- **Eval 指标**：评估输出质量，包括来源覆盖、字段可解释率、事实核查分、质检得分、重试次数、耗时。
+- **decision_logs**：记录关键决策依据，例如为什么打回采集、为什么进入分析、为什么标记 `not_public` 后继续。
+
+因此我们监控过程，但不迷信“理想路径”。核心评估对象是证据可信度、决策合理性和闭环是否真正改善。
+
+采集性能方面，Discovery 与 Collection 均使用并发搜索：
+
+- `SEARCH_CONCURRENCY` 控制单个竞品内 query 并发数。
+- `COLLECTION_COMPETITOR_CONCURRENCY` 控制同时采集几个竞品。
+- `SEARCH_STAGGER_SECONDS` 用于错峰启动，兼顾速度与限流风险。
 
 ## 五、项目结构
 
 ```
-competitor-analysis-mas-v2/
+competitor-analysis-multi-agent/
 ├── README.md                    # 本文档
-├── config.py                    # 全局配置（5种LLM后端）
+├── COMPLIANCE.md                # 合规与数据来源说明
+├── config.py                    # 全局配置（多LLM后端）
 ├── requirements.txt             # 依赖清单
-├── main.py                      # 旧asyncio版本主入口
-├── main_graph.py                # ✨ LangGraph版本主入口（推荐）
+├── main.py                      # 主入口（LangGraph版本）
 ├── core/
-│   ├── __init__.py
 │   ├── graph_state.py           # LangGraph全局State定义
-│   ├── llm_client.py            # LLM统一调用封装（5种后端）
+│   ├── llm_client.py            # LLM统一调用封装（多后端 + 重试退避）
 │   ├── type_utils.py            # LangGraph序列化兼容工具
-│   ├── orchestrator_graph.py    # LangGraph编排器（带动态循环）
+│   ├── orchestrator_graph.py    # LangGraph编排器（质检回退 + 分析主动协作）
+│   ├── orchestrator.py          # 旧asyncio线性编排器（保留参考）
+│   ├── scenario_profile.py      # 通用场景画像（多行业维度库）
 │   ├── search_client.py         # 百度AI搜索客户端
 │   └── prompt_loader.py         # 提示词模板加载器
 ├── agents/
-│   ├── __init__.py
 │   ├── base_agent.py            # Agent基类
-│   ├── discovery_agent.py       # 竞品发现Agent（含领域预设库）
-│   ├── collection_agent.py      # 数据采集Agent
-│   ├── product_agent.py         # 产品分析Agent
-│   ├── pricing_agent.py         # 定价分析Agent
-│   ├── market_agent.py          # 市场分析Agent
-│   ├── strategy_agent.py        # 策略建议Agent
-│   └── quality_check_agent.py   # ✨ 质检Agent
+│   ├── research/                # 佳怡：发现 + 采集
+│   │   ├── discovery_agent.py
+│   │   └── collection_agent.py
+│   ├── analysis/                # 三维分析 + 质检
+│   │   ├── product_agent.py
+│   │   ├── pricing_agent.py
+│   │   ├── market_agent.py
+│   │   └── quality_check_agent.py   # ✨ 双层质检
+│   └── reporting/               # 策略 + 报告
+│       ├── strategy_agent.py
+│       └── report_formatter.py
 ├── models/
-│   ├── __init__.py
-│   └── domain.py                # 领域模型（TypedDict数据Schema）
+│   └── domain.py                # 领域模型（dataclass数据Schema）
 ├── prompts/                     # 提示词模板（.md格式）
-├── output/                      # 报告输出目录
-│   ├── langgraph_dag.png        # 自动生成的DAG图
-│   └── 产品名_analysis_report.html
-└── data/                        # 示例数据
+├── eval/                        # ✨ 评测集
+│   ├── dataset.json             # 多行业测试用例
+│   ├── run_eval.py              # 评测脚本
+│   └── eval_result.json         # 评测输出（运行后生成）
+└── output/                      # 报告输出目录
+    ├── langgraph_dag.png        # 自动生成的DAG图
+    └── 产品名_analysis_report.html
 ```
 
 ## 六、技术栈
@@ -229,4 +268,3 @@ competitor-analysis-mas-v2/
 ---
 
 **让竞品分析从"凭经验"升级为"凭数据与智能"** 🚀
-

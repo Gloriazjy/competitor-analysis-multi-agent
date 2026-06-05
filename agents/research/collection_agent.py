@@ -14,6 +14,7 @@ from core.prompt_loader import load as load_prompts
 from core.search_client import SearchClient
 from core.scenario_profile import detect_scenario
 import config
+import asyncio
 import json
 import re
 
@@ -48,26 +49,33 @@ class CollectionAgent(BaseAgent):
         if quality_feedback:
             self._log(f"   收到质检反馈: {len(quality_feedback)}条")
 
-        result_data = {}
         product_name = competitor_list.product_name
+        competitors = list(competitor_list.competitors)
+        semaphore = asyncio.Semaphore(max(1, config.COLLECTION_COMPETITOR_CONCURRENCY))
 
-        for i, comp in enumerate(competitor_list.competitors):
-            self._log(f"   采集 {i+1}/{len(competitor_list.competitors)}: {comp.name}")
-            data = self._collect_competitor(
-                product_name,
-                product_description,
-                comp.name,
-                quality_feedback=quality_feedback or [],
-            )
-            result_data[comp.name] = data
+        async def collect_one(index, comp):
+            async with semaphore:
+                self._log(f"   采集 {index+1}/{len(competitors)}: {comp.name}")
+                data = await self._collect_competitor(
+                    product_name,
+                    product_description,
+                    comp.name,
+                    quality_feedback=quality_feedback or [],
+                )
+                return comp.name, data
+
+        pairs = await asyncio.gather(
+            *(collect_one(i, comp) for i, comp in enumerate(competitors))
+        )
+        result_data = dict(pairs)
 
         self._log(f"✅ 数据采集完成: {len(result_data)}个竞品")
         return result_data
 
-    def _collect_competitor(self, product_name: str,
-                            product_description: str,
-                            competitor_name: str,
-                            quality_feedback: list[dict] = None) -> CompetitorData:
+    async def _collect_competitor(self, product_name: str,
+                                  product_description: str,
+                                  competitor_name: str,
+                                  quality_feedback: list[dict] = None) -> CompetitorData:
         """采集单个竞品数据"""
         # 生成搜索查询
         profile = detect_scenario(product_description)
@@ -97,7 +105,8 @@ class CollectionAgent(BaseAgent):
                 ])
 
         # 执行搜索
-        search_results = self.search_client.batch_search(queries)
+        queries = list(dict.fromkeys(queries))
+        search_results = await self.search_client.batch_search_async(queries)
 
         # 提取搜索文本
         all_text = ""

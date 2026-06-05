@@ -82,9 +82,12 @@ def _call_openai_compat(
         "max_tokens": max_tokens,
     }
 
-    for attempt in range(2):
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        is_last = attempt == max_attempts - 1
+        backoff = 2 * (attempt + 1)  # 2s, 4s 递增退避
         try:
-            print(f"  [{provider_name}] [{agent_id}] 🔄 调用API (attempt {attempt+1})...")
+            print(f"  [{provider_name}] [{agent_id}] 🔄 调用API (attempt {attempt+1}/{max_attempts})...")
             resp = requests.post(api_url, headers=headers, json=payload, **_request_options())
             try:
                 result = resp.json()
@@ -93,6 +96,9 @@ def _call_openai_compat(
                     f"  [{provider_name}] [{agent_id}] ❌ 非JSON响应 "
                     f"(status={resp.status_code}): {_safe_error_text(resp.text)}"
                 )
+                if not is_last:
+                    time.sleep(backoff)
+                    continue
                 return ""
 
             if resp.status_code >= 400:
@@ -100,16 +106,16 @@ def _call_openai_compat(
                     f"  [{provider_name}] [{agent_id}] ❌ HTTP错误 "
                     f"(status={resp.status_code}): {_safe_error_text(json.dumps(result, ensure_ascii=False))}"
                 )
-                if attempt == 0:
-                    time.sleep(2)
+                if not is_last:
+                    time.sleep(backoff)
                     continue
                 return ""
 
             if "error" in result:
                 error_msg = result["error"].get("message", str(result["error"]))
                 print(f"  [{provider_name}] [{agent_id}] ❌ API错误 (attempt {attempt+1}): {error_msg}")
-                if attempt == 0:
-                    time.sleep(2)
+                if not is_last:
+                    time.sleep(backoff)
                     continue
                 return ""
 
@@ -135,23 +141,29 @@ def _call_openai_compat(
                 return content
             else:
                 print(f"  [{provider_name}] [{agent_id}] ❌ 返回内容为空")
+                if not is_last:
+                    time.sleep(backoff)
+                    continue
                 return ""
 
         except requests.exceptions.Timeout:
-            print(f"  [{provider_name}] [{agent_id}] ⏱️ 请求超时 (attempt {attempt+1})")
-            if attempt == 0:
+            print(f"  [{provider_name}] [{agent_id}] ⏱️ 请求超时 (attempt {attempt+1}/{max_attempts})")
+            if not is_last:
+                time.sleep(backoff)
                 continue
             return ""
-        except requests.exceptions.SSLError as e:
-            print(f"  [{provider_name}] [{agent_id}] ❌ SSL/TLS失败: {_safe_error_text(str(e))}")
-            return ""
-        except requests.exceptions.ConnectionError as e:
-            print(f"  [{provider_name}] [{agent_id}] ❌ 连接失败: {_safe_error_text(str(e))}")
+        except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+            # SSLEOFError/连接重置等瞬时网络错误，重试往往可恢复
+            print(f"  [{provider_name}] [{agent_id}] ❌ 网络/SSL失败 (attempt {attempt+1}/{max_attempts}): "
+                  f"{_safe_error_text(str(e))}")
+            if not is_last:
+                time.sleep(backoff)
+                continue
             return ""
         except Exception as e:
-            print(f"  [{provider_name}] [{agent_id}] ❌ 异常: {e}")
-            if attempt == 0:
-                time.sleep(2)
+            print(f"  [{provider_name}] [{agent_id}] ❌ 异常 (attempt {attempt+1}/{max_attempts}): {e}")
+            if not is_last:
+                time.sleep(backoff)
                 continue
             return ""
 
@@ -782,4 +794,3 @@ def reset_llm_stats():
     """重置LLM调用统计"""
     global _call_stats
     _call_stats = {"total": 0, "success": 0, "fallback": 0, "errors": []}
-

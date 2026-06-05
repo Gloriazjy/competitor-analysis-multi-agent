@@ -7,6 +7,7 @@ core/search_client.py — 百度AI搜索客户端
 
 import json
 import time
+import asyncio
 import requests
 
 import config
@@ -88,6 +89,42 @@ class SearchClient:
             if i < total - 1:
                 time.sleep(delay)
         return results
+
+    async def search_async(self, query: str, recency: str | None = None) -> dict:
+        """异步搜索包装：复用同步HTTP实现，避免引入额外依赖。"""
+        return await asyncio.to_thread(self.search, query, recency)
+
+    async def batch_search_async(
+        self,
+        queries: list[str],
+        concurrency: int = config.SEARCH_CONCURRENCY,
+        stagger: float = config.SEARCH_STAGGER_SECONDS,
+    ) -> list[dict]:
+        """
+        批量并发搜索，保持返回顺序与 queries 一致。
+
+        并发数默认较保守，避免评测和现场演示时被搜索接口限流。
+        """
+        total = len(queries)
+        if not queries:
+            return []
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+
+        async def run_one(index: int, query: str) -> dict:
+            if stagger > 0:
+                await asyncio.sleep(index * stagger)
+            async with semaphore:
+                print(f"  [SearchClient] 并发搜索 {index+1}/{total}: {query[:50]}...")
+                try:
+                    result = await self.search_async(query)
+                    return {"query": query, "result": result}
+                except Exception as e:
+                    print(f"  [SearchClient] 搜索失败: {query[:50]}... | 错误: {e}")
+                    return {"query": query, "result": None, "error": str(e)}
+
+        return await asyncio.gather(
+            *(run_one(i, query) for i, query in enumerate(queries))
+        )
 
     @staticmethod
     def extract_text(search_result: dict) -> str:
