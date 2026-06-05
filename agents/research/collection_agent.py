@@ -143,18 +143,26 @@ class CollectionAgent(BaseAgent):
                     evidence_notes=result.get("evidence_notes", []),
                     risk_flags=result.get("risk_flags", []),
                     search_sources=sources,
+                    field_status=self._normalize_field_status(result.get("field_status", {}), result, sources),
                 )
             else:
                 self._log(f"   ⚠️ {competitor_name} LLM汇总失败，降级到规则引擎")
 
         # Fallback: 规则引擎提取
         offers = self._extract_offers(all_text, profile)
+        field_values = {
+            "product_features": all_text[:500] if all_text else "",
+            "pricing_info": "; ".join(item.get("price", "") for item in offers if item.get("price")),
+            "market_share": self._extract_market_proxy(all_text),
+            "user_reviews": self._extract_review_summary(all_text),
+        }
         return CompetitorData(
             name=competitor_name,
             category=profile.category,
-            product_features=all_text[:500] if all_text else "数据采集失败",
-            pricing_info="; ".join(item.get("price", "") for item in offers if item.get("price")),
-            user_reviews=self._extract_review_summary(all_text),
+            product_features=field_values["product_features"] or "数据采集失败",
+            pricing_info=field_values["pricing_info"] or ("咨询报价/未公开价格" if offers else ""),
+            market_share=field_values["market_share"],
+            user_reviews=field_values["user_reviews"],
             strengths=self._extract_strengths(all_text, profile),
             weaknesses="; ".join(self._extract_risk_flags(all_text, profile)),
             channels="; ".join(self._extract_contacts(all_text)),
@@ -164,6 +172,7 @@ class CollectionAgent(BaseAgent):
             evidence_notes=sources[:3],
             risk_flags=self._extract_risk_flags(all_text, profile),
             search_sources=sources,
+            field_status=self._infer_field_status(field_values, sources, offers),
         )
 
     @staticmethod
@@ -187,10 +196,56 @@ class CollectionAgent(BaseAgent):
 - source_urls: 数组，原始来源URL
 - evidence_notes: 数组，支撑价格、服务、口碑、风险判断的证据摘要
 - risk_flags: 数组，隐形消费、口碑争议、退款限制、价格口径不清等风险
+- field_status: 对象，必须包含 product_features、pricing_info、market_share、user_reviews 四个键；
+  值只能是 found、not_public、not_found、proxy_available。公开资料未披露时请诚实标记，不要编造。
 本场景为：{profile.category}
 重点比较维度：{", ".join(profile.offer_dimensions)}
 重点质检风险：{", ".join(profile.quality_risks)}
 """
+
+    @classmethod
+    def _normalize_field_status(cls, status: dict, result: dict, sources: list[str]) -> dict[str, str]:
+        values = {
+            "product_features": result.get("product_features", ""),
+            "pricing_info": result.get("pricing_info", ""),
+            "market_share": result.get("market_share", ""),
+            "user_reviews": result.get("user_reviews", ""),
+        }
+        offers = result.get("offers", [])
+        normalized = cls._infer_field_status(values, sources, offers)
+        allowed = {"found", "not_public", "not_found", "proxy_available"}
+        for key in normalized:
+            value = str((status or {}).get(key, "")).strip()
+            if value in allowed:
+                normalized[key] = value
+        return normalized
+
+    @staticmethod
+    def _infer_field_status(values: dict[str, str], sources: list[str], offers: list[dict]) -> dict[str, str]:
+        has_sources = bool(sources)
+        pricing_text = values.get("pricing_info", "")
+        market_text = values.get("market_share", "")
+        review_text = values.get("user_reviews", "")
+        return {
+            "product_features": "found" if values.get("product_features") else ("not_found" if has_sources else "not_public"),
+            "pricing_info": "found" if pricing_text or offers else ("not_public" if has_sources else "not_found"),
+            "market_share": "found" if market_text and "替代指标" not in market_text else ("proxy_available" if market_text else ("not_public" if has_sources else "not_found")),
+            "user_reviews": "found" if review_text else ("not_found" if has_sources else "not_public"),
+        }
+
+    @staticmethod
+    def _extract_market_proxy(text: str) -> str:
+        if not text:
+            return ""
+        keywords = ("用户量", "下载量", "销量", "门店", "覆盖", "排名", "融资", "营收", "GMV", "订单")
+        snippets = []
+        for sentence in re.split(r"[。！？\n]", text):
+            clean = sentence.strip()
+            if clean and any(keyword in clean for keyword in keywords):
+                snippets.append(clean[:120])
+            if len(snippets) >= 3:
+                break
+        return "替代指标: " + "；".join(snippets) if snippets else ""
 
     @staticmethod
     def _extract_contacts(text: str) -> list[str]:

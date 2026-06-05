@@ -56,24 +56,25 @@ class QualityCheckAgent(BaseAgent):
                 return CompetitorData(name=cd)
         
         # 情况3: 字典形式
-            if isinstance(cd, dict):
-                return CompetitorData(
-                    name=cd.get("name", ""),
-                    category=cd.get("category", ""),
-                    product_features=cd.get("product_features", ""),
-                    pricing_info=cd.get("pricing_info", ""),
-                    market_share=cd.get("market_share", ""),
-                    user_reviews=cd.get("user_reviews", ""),
-                    strengths=cd.get("strengths", ""),
-                    weaknesses=cd.get("weaknesses", ""),
-                    channels=cd.get("channels", ""),
-                    offers=cd.get("offers", []),
-                    contact_methods=cd.get("contact_methods", []),
-                    source_urls=cd.get("source_urls", []),
-                    evidence_notes=cd.get("evidence_notes", []),
-                    risk_flags=cd.get("risk_flags", []),
-                    search_sources=cd.get("search_sources", [])
-                )
+        if isinstance(cd, dict):
+            return CompetitorData(
+                name=cd.get("name", ""),
+                category=cd.get("category", ""),
+                product_features=cd.get("product_features", ""),
+                pricing_info=cd.get("pricing_info", ""),
+                market_share=cd.get("market_share", ""),
+                user_reviews=cd.get("user_reviews", ""),
+                strengths=cd.get("strengths", ""),
+                weaknesses=cd.get("weaknesses", ""),
+                channels=cd.get("channels", ""),
+                offers=cd.get("offers", []),
+                contact_methods=cd.get("contact_methods", []),
+                source_urls=cd.get("source_urls", []),
+                evidence_notes=cd.get("evidence_notes", []),
+                risk_flags=cd.get("risk_flags", []),
+                search_sources=cd.get("search_sources", []),
+                field_status=cd.get("field_status", {})
+            )
         
         # 默认情况
         return CompetitorData(name="未知竞品")
@@ -107,6 +108,14 @@ class QualityCheckAgent(BaseAgent):
     def _contains_any(text: str, words: list[str]) -> bool:
         haystack = (text or "").lower()
         return any(word.lower() in haystack for word in words if word)
+
+    @staticmethod
+    def _field_status(cd, field: str) -> str:
+        return str((getattr(cd, "field_status", {}) or {}).get(field, "")).strip()
+
+    @classmethod
+    def _is_unavailable(cls, cd, field: str) -> bool:
+        return cls._field_status(cd, field) in {"not_public", "not_found", "proxy_available"}
 
     @staticmethod
     def _issue(issue_type: str, severity: str, message: str,
@@ -206,21 +215,55 @@ class QualityCheckAgent(BaseAgent):
                 {"expected_count": expected_count, "actual_count": len(competitors_data)},
             ))
             score -= 0.2
+        current_retry_count = state.get("retry_count", 0)
         for cd in competitors_data:
-            missing_fields = [
-                field for field in ("product_features", "pricing_info", "market_share", "user_reviews")
-                if self._is_blank(getattr(cd, field, ""))
-            ]
-            if len(missing_fields) >= 3:
+            missing_retry_fields = []
+            if self._is_blank(cd.product_features) and not self._is_unavailable(cd, "product_features"):
+                missing_retry_fields.append("product_features")
+            if self._is_blank(cd.pricing_info) and not cd.offers and not self._is_unavailable(cd, "pricing_info"):
+                missing_retry_fields.append("pricing_info")
+            if self._is_blank(cd.user_reviews) and not self._is_unavailable(cd, "user_reviews"):
+                missing_retry_fields.append("user_reviews")
+
+            if missing_retry_fields:
                 issues.append(self._issue(
                     "competitor_data_incomplete",
                     "high",
-                    f"竞品[{cd.name}]核心采集字段缺失: {', '.join(missing_fields)}",
+                    f"竞品[{cd.name}]可补采字段缺失: {', '.join(missing_retry_fields)}",
                     "collection",
-                    {"competitor": cd.name, "missing_fields": missing_fields},
+                    {"competitor": cd.name, "missing_fields": missing_retry_fields},
                 ))
                 score -= 0.15
-                self._log(f"   ⚠️  竞品[{cd.name}]采集字段缺失: {missing_fields}")
+                self._log(f"   ⚠️  竞品[{cd.name}]可补采字段缺失: {missing_retry_fields}")
+
+            if self._is_blank(cd.pricing_info) and not cd.offers and self._is_unavailable(cd, "pricing_info"):
+                issues.append(self._issue(
+                    "pricing_public_unavailable",
+                    "medium",
+                    f"竞品[{cd.name}]未发现公开价格，需在定价分析中按咨询报价/价格透明度处理",
+                    "pricing_analysis",
+                    {"competitor": cd.name, "field_status": self._field_status(cd, "pricing_info")},
+                ))
+                score -= 0.02
+
+            if self._is_blank(cd.market_share) and not self._is_unavailable(cd, "market_share"):
+                issues.append(self._issue(
+                    "market_proxy_needed",
+                    "medium",
+                    f"竞品[{cd.name}]未发现市场份额，需市场分析使用用户量、渠道、排名等替代指标",
+                    "market_analysis" if current_retry_count else "collection",
+                    {"competitor": cd.name},
+                ))
+                score -= 0.06
+
+            if self._is_blank(cd.user_reviews) and self._is_unavailable(cd, "user_reviews"):
+                issues.append(self._issue(
+                    "reviews_public_unavailable",
+                    "low",
+                    f"竞品[{cd.name}]未发现可验证公开评论，报告中需明确不编造口碑",
+                    "market_analysis",
+                    {"competitor": cd.name, "field_status": self._field_status(cd, "user_reviews")},
+                ))
             source_count = len(cd.search_sources) + len(cd.source_urls)
             if source_count < self.MIN_SOURCE_COUNT:
                 issues.append(self._issue(
@@ -233,24 +276,25 @@ class QualityCheckAgent(BaseAgent):
                 score -= 0.1
                 self._log(f"   ⚠️  竞品[{cd.name}]来源不足")
             profile = detect_scenario(f"{cd.category} {cd.product_features} {cd.pricing_info} {cd.channels}")
-            if profile.offer_dimensions and not cd.offers and self._is_blank(cd.pricing_info):
+            if profile.offer_dimensions and not cd.offers and self._is_blank(cd.pricing_info) and not self._is_unavailable(cd, "pricing_info"):
                 issues.append(self._issue(
                     "offer_missing",
                     "high",
                     f"竞品[{cd.name}]缺少可比较报价/套餐信息",
-                    "collection",
+                    "collection" if current_retry_count == 0 else "pricing_analysis",
                     {"competitor": cd.name, "expected_offer_dimensions": list(profile.offer_dimensions)},
                 ))
                 score -= 0.12
             if profile.scenario_id in {"service_package", "general"} and not cd.contact_methods and self._is_blank(cd.channels):
+                contact_retryable = current_retry_count == 0
                 issues.append(self._issue(
-                    "contact_missing",
-                    "medium",
-                    f"竞品[{cd.name}]缺少报名/购买/咨询联系方式",
-                    "collection",
+                    "contact_missing" if contact_retryable else "contact_public_unavailable",
+                    "medium" if contact_retryable else "low",
+                    f"竞品[{cd.name}]缺少报名/购买/咨询联系方式" if contact_retryable else f"竞品[{cd.name}]未发现公开联系方式，报告中需提示人工核实",
+                    "collection" if contact_retryable else "market_analysis",
                     {"competitor": cd.name},
                 ))
-                score -= 0.08
+                score -= 0.08 if contact_retryable else 0.0
             if cd.offers:
                 for offer in cd.offers[:3]:
                     if not offer.get("price"):

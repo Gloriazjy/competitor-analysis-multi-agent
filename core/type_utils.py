@@ -51,7 +51,8 @@ def to_competitor_data(cd):
             source_urls=cd.get("source_urls", []),
             evidence_notes=cd.get("evidence_notes", []),
             risk_flags=cd.get("risk_flags", []),
-            search_sources=cd.get("search_sources", [])
+            search_sources=cd.get("search_sources", []),
+            field_status=cd.get("field_status", {})
         )
     
     # 默认情况

@@ -73,8 +73,12 @@ class MarketAgent(BaseAgent):
             label = name if name != product_name else f"{name}(我方产品)"
             lines.append(f"\n### {label}")
             lines.append(f"- 市场份额: {data.market_share[:300]}")
+            lines.append(f"- 市场份额采集状态: {(data.field_status or {}).get('market_share', 'unknown')}")
             lines.append(f"- 用户评价: {data.user_reviews[:300]}")
+            lines.append(f"- 用户评价采集状态: {(data.field_status or {}).get('user_reviews', 'unknown')}")
             lines.append(f"- 渠道策略: {data.channels[:200]}")
+            if data.evidence_notes:
+                lines.append(f"- 证据摘要: {'; '.join(data.evidence_notes[:2])[:300]}")
         return "\n".join(lines)
 
     def _parse_market_analysis(self, result: dict) -> MarketAnalysis:
@@ -115,12 +119,12 @@ class MarketAgent(BaseAgent):
         for name, data in competitors_data.items():
             market_share_data.append(MarketShareItem(
                 competitor=name,
-                share_estimate=data.market_share[:100] if data.market_share else "未知",
+                share_estimate=data.market_share[:100] if data.market_share else "无公开份额，需用替代指标评估",
                 trend=self._infer_trend(data.market_share + " " + data.user_reviews + " " + " ".join(data.risk_flags)),
             ))
-            if data.user_reviews or data.risk_flags:
+            if data.user_reviews or data.risk_flags or (data.field_status or {}).get("user_reviews") in {"not_found", "not_public"}:
                 user_reputation[name] = UserReputation(
-                    score="需核实",
+                    score="需核实" if data.user_reviews or data.risk_flags else "未发现可验证公开评论",
                     keywords=self._extract_reputation_keywords(data.user_reviews + " " + " ".join(data.risk_flags)),
                 )
 

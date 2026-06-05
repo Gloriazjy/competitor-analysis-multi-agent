@@ -73,6 +73,9 @@ class PricingAgent(BaseAgent):
             label = name if name != product_name else f"{name}(我方产品)"
             lines.append(f"\n### {label}")
             lines.append(f"- 定价信息: {data.pricing_info[:300]}")
+            lines.append(f"- 定价采集状态: {(data.field_status or {}).get('pricing_info', 'unknown')}")
+            if data.offers:
+                lines.append(f"- 报价方案: {json.dumps(data.offers[:3], ensure_ascii=False)[:800]}")
             lines.append(f"- 优势: {data.strengths[:200]}")
             lines.append(f"- 劣势: {data.weaknesses[:200]}")
         return "\n".join(lines)
@@ -122,10 +125,11 @@ class PricingAgent(BaseAgent):
                         ),
                     ))
             else:
+                paid_tier = pricing_text[:120] if pricing_text else "未公开价格/需咨询"
                 pricing_comparison.append(PricingItem(
                     competitor=name,
                     free_tier=self._extract_pricing_hint(pricing_text, ["免费", "free", "试用"]),
-                    paid_tier=pricing_text[:120] if pricing_text else "未知",
+                    paid_tier=paid_tier,
                     pricing_model=self._infer_pricing_model(pricing_text, profile.pricing_dimensions),
                 ))
 

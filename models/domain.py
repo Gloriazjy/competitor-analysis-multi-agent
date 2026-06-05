@@ -57,6 +57,7 @@ class CompetitorData:
     evidence_notes: list[str] = field(default_factory=list)  # 支撑结论的证据摘要
     risk_flags: list[str] = field(default_factory=list)  # 隐形消费/口碑/合规等风险
     search_sources: list[str] = field(default_factory=list)  # 搜索原文
+    field_status: dict[str, str] = field(default_factory=dict)  # 字段可得性: found/not_public/not_found/proxy_available
 
 
 @dataclass
