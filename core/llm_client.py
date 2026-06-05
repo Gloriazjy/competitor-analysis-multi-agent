@@ -682,6 +682,94 @@ def parse_llm_json(text: str) -> dict:
 
 
 # ============================
+# 多模型灾难网关集成 - 自动故障转移
+# ============================
+_gateway_initialized = False
+
+def _init_disaster_gateway():
+    """初始化灾难网关，注册所有服务商回调"""
+    global _gateway_initialized
+    if _gateway_initialized:
+        return
+    
+    if not config.ENABLE_DISASTER_GATEWAY:
+        print("  [灾难网关] [INFO] 网关已禁用，使用原有模式")
+        _gateway_initialized = True
+        return
+    
+    try:
+        from core.disaster_gateway import get_disaster_gateway
+        gateway = get_disaster_gateway()
+        
+        # 注册所有服务商的实际调用函数
+        gateway.register_provider_callback("doubao", _call_doubao)
+        gateway.register_provider_callback("aliyun", _call_aliyun)
+        gateway.register_provider_callback("qianfan", _call_qianfan)
+        gateway.register_provider_callback("openai", _call_openai)
+        gateway.register_provider_callback("ollama", _call_ollama)
+        
+        # 从配置加载自定义降级链路
+        if config.GATEWAY_FALLBACK_CHAIN:
+            custom_chain = [p.strip() for p in config.GATEWAY_FALLBACK_CHAIN.split(",") if p.strip()]
+            gateway.set_fallback_chain(custom_chain)
+        
+        print("  [灾难网关] [OK] 多模型高可用网关已启用")
+        print("  [灾难网关] [INFO] 降级链路: " + " -> ".join(gateway.fallback_chain))
+        _gateway_initialized = True
+        
+    except Exception as e:
+        print(f"  [灾难网关] ⚠️ 网关初始化失败，回退到原有模式: {e}")
+        _gateway_initialized = True
+
+
+def llm_call_with_gateway(system_prompt: str, user_message: str,
+                         temperature: float = 0.3, max_tokens: int = 4096,
+                         agent_id: str = "", preferred_provider: str = "") -> str:
+    """
+    带灾难网关的增强版LLM调用
+    
+    - 单点故障50ms内自动跨厂商切换
+    - 熔断器保护避免雪崩
+    - 完全向后兼容原有接口
+    """
+    _init_disaster_gateway()
+    
+    # 如果网关禁用，直接调用原函数
+    if not config.ENABLE_DISASTER_GATEWAY:
+        return llm_call(system_prompt, user_message, temperature, max_tokens, agent_id)
+    
+    from core.disaster_gateway import get_disaster_gateway
+    gateway = get_disaster_gateway()
+    
+    if not preferred_provider:
+        preferred_provider = config.LLM_PROVIDER.lower()
+    
+    result, used_provider = gateway.call_with_failover(
+        system_prompt, user_message,
+        temperature, max_tokens, agent_id,
+        preferred_provider
+    )
+    
+    # 更新统计
+    _call_stats["total"] += 1
+    if result:
+        _call_stats["success"] += 1
+    else:
+        _call_stats["fallback"] += 1
+    
+    return result
+
+
+def print_gateway_status():
+    """打印灾难网关实时状态面板"""
+    _init_disaster_gateway()
+    if config.ENABLE_DISASTER_GATEWAY:
+        from core.disaster_gateway import get_disaster_gateway
+        gateway = get_disaster_gateway()
+        gateway.print_status_dashboard()
+
+
+# ============================
 # 调用统计
 # ============================
 
