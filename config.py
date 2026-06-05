@@ -139,3 +139,25 @@ DEFAULT_COMPETITOR_COUNT = 5
 LLM_TEMPERATURE = 0.3       # 适中温度，保证分析既准确又有洞察
 LLM_MAX_TOKENS = 4096       # 竞品数据较多，增大输出上限
 
+# ========================
+# 多模型灾难网关配置
+# ========================
+# 启用灾难网关 - 自动跨厂商故障转移
+ENABLE_DISASTER_GATEWAY = os.environ.get("ENABLE_DISASTER_GATEWAY", "true").lower() != "false"
+
+# 失败阈值：连续N次失败后触发熔断
+GATEWAY_FAILURE_THRESHOLD = int(os.environ.get("GATEWAY_FAILURE_THRESHOLD", "5"))
+
+# 熔断状态保持时间（毫秒）- 之后进入半开状态尝试恢复
+GATEWAY_OPEN_TIMEOUT_MS = int(os.environ.get("GATEWAY_OPEN_TIMEOUT_MS", "30000"))
+
+# 半开状态下允许的最大并发探测请求数
+GATEWAY_HALF_OPEN_MAX_CALLS = int(os.environ.get("GATEWAY_HALF_OPEN_MAX_CALLS", "2"))
+
+# 目标最大切换耗时（毫秒）- 单点故障应在50ms内完成切换
+GATEWAY_SWITCH_OVERHEAD_MS = int(os.environ.get("GATEWAY_SWITCH_OVERHEAD_MS", "50"))
+
+# 自定义降级链路（逗号分隔，优先级从高到低）
+# 例如: "doubao,aliyun,qianfan,openai,ollama"
+GATEWAY_FALLBACK_CHAIN = os.environ.get("GATEWAY_FALLBACK_CHAIN", "")
+
