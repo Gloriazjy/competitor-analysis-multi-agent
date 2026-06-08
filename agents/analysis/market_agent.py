@@ -55,7 +55,7 @@ class MarketAgent(BaseAgent):
             feedback_text = self._format_feedback(quality_feedback or [])
             if feedback_text:
                 prompt += f"\n\n## 质检返工要求\n{feedback_text}\n请补齐市场份额、趋势和用户口碑维度，并避免无来源判断。"
-            result = self.ask_llm_json(prompt, max_tokens=4096)
+            result = await self.ask_llm_json_async(prompt, max_tokens=4096)
             if result:
                 analysis = self._parse_market_analysis(result)
                 self._log(f"✅ 市场分析完成: {len(analysis.market_share_data)}个竞品市场数据")

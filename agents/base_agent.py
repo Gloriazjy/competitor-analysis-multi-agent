@@ -5,6 +5,7 @@ agents/base_agent.py — Agent基类
 所有竞品分析智能体继承此基类，获得LLM调用、日志记录等基础能力。
 """
 
+import asyncio
 from abc import ABC, abstractmethod
 from core.llm_client import llm_call, parse_llm_json
 import config
@@ -58,6 +59,27 @@ class BaseAgent(ABC):
                      max_tokens: int = None) -> dict:
         """调用LLM并解析JSON返回"""
         text = self.ask_llm(user_message, temperature, max_tokens)
+        if text:
+            parsed = parse_llm_json(text)
+            if parsed:
+                return parsed
+            else:
+                self._log(f"   ⚠️ LLM返回了文本但JSON解析失败，降级到规则引擎")
+        return {}
+
+    async def ask_llm_async(self, user_message: str,
+                            temperature: float = None,
+                            max_tokens: int = None) -> str:
+        """异步调用LLM（将同步HTTP调用放入线程池，不阻塞事件循环）"""
+        return await asyncio.to_thread(
+            self.ask_llm, user_message, temperature, max_tokens
+        )
+
+    async def ask_llm_json_async(self, user_message: str,
+                                 temperature: float = None,
+                                 max_tokens: int = None) -> dict:
+        """异步调用LLM并解析JSON返回"""
+        text = await self.ask_llm_async(user_message, temperature, max_tokens)
         if text:
             parsed = parse_llm_json(text)
             if parsed:
