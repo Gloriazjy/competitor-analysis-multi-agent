@@ -60,7 +60,7 @@ class DiscoveryAgent(BaseAgent):
         self._log(f"   识别场景: {profile.category}")
 
         # --- 步骤1: 生成搜索关键词 ---
-        keywords = self._generate_keywords(product_description, needs_more_competitors)
+        keywords = await self._generate_keywords(product_description, needs_more_competitors)
         self._log(f"   生成搜索关键词: {keywords}")
 
         # --- 步骤2: 执行搜索 ---
@@ -69,7 +69,7 @@ class DiscoveryAgent(BaseAgent):
 
         # --- 步骤3: 筛选竞品 ---
         target_count = max_competitors + 2 if needs_more_competitors else max_competitors
-        competitor_list = self._filter_competitors(
+        competitor_list = await self._filter_competitors(
             product_description, search_results, target_count
         )
 
@@ -79,14 +79,14 @@ class DiscoveryAgent(BaseAgent):
 
         return competitor_list
 
-    def _generate_keywords(self, product_description: str, needs_more: bool = False) -> list[str]:
+    async def _generate_keywords(self, product_description: str, needs_more: bool = False) -> list[str]:
         """生成搜索关键词（LLM + 规则引擎降级）"""
         if config.ENABLE_LLM:
             prompt = self._prompt_keywords.format(
                 product_description=product_description,
                 count=8 if needs_more else 5,
             )
-            result = self.ask_llm_json(prompt)
+            result = await self.ask_llm_json_async(prompt)
             if result and "keywords" in result:
                 keywords = result["keywords"]
                 self._log(f"   LLM生成关键词: {keywords}")
@@ -124,9 +124,9 @@ class DiscoveryAgent(BaseAgent):
             results.extend(additional_results)
         return results
 
-    def _filter_competitors(self, product_description: str,
-                            search_results: list[dict],
-                            max_competitors: int) -> CompetitorList:
+    async def _filter_competitors(self, product_description: str,
+                                  search_results: list[dict],
+                                  max_competitors: int) -> CompetitorList:
         """筛选核心竞品（LLM + 规则引擎降级）"""
         all_text = ""
         for sr in search_results:
@@ -142,7 +142,7 @@ class DiscoveryAgent(BaseAgent):
                 search_results=all_text[:8000] if len(all_text) > 6000 else all_text[:6000],
                 max_competitors=max_competitors,
             )
-            result = self.ask_llm_json(prompt, max_tokens=4096)
+            result = await self.ask_llm_json_async(prompt, max_tokens=4096)
             if result and "competitors" in result:
                 competitors = []
                 for c in result["competitors"]:

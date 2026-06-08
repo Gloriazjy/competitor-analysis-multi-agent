@@ -393,7 +393,7 @@ class QualityCheckAgent(BaseAgent):
         )
         factual_score = 1.0
         if config.ENABLE_LLM and competitors_data:
-            factual_score, llm_issues = self._llm_fact_check(
+            factual_score, llm_issues = await self._llm_fact_check(
                 source_text, product_analysis, pricing_analysis, market_analysis
             )
             if llm_issues:
@@ -508,8 +508,8 @@ class QualityCheckAgent(BaseAgent):
         high = [issue.get("type", "") for issue in issues if issue.get("severity") in {"critical", "high"}]
         return "存在需回退处理的问题: " + "、".join(high[:3])
 
-    def _llm_fact_check(self, source_text, product_analysis,
-                        pricing_analysis, market_analysis) -> tuple[float, list[dict]]:
+    async def _llm_fact_check(self, source_text, product_analysis,
+                              pricing_analysis, market_analysis) -> tuple[float, list[dict]]:
         """第2层：调用LLM核查分析结论是否被采集原文支撑。
 
         返回 (事实得分, 问题清单)。LLM失败时返回(1.0, [])不影响主流程。
@@ -524,7 +524,7 @@ class QualityCheckAgent(BaseAgent):
             evidence_text=source_text[:8000],
             claims_text=claims_text[:4000],
         )
-        result = self.ask_llm_json(prompt, temperature=0.0, max_tokens=2048)
+        result = await self.ask_llm_json_async(prompt, temperature=0.0, max_tokens=2048)
         if not result:
             self._log("   ⚠️ LLM事实核查无返回，跳过第2层（仅用规则层）")
             return 1.0, []

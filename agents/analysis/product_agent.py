@@ -56,7 +56,7 @@ class ProductAgent(BaseAgent):
             feedback_text = self._format_feedback(quality_feedback or [])
             if feedback_text:
                 prompt += f"\n\n## 质检返工要求\n{feedback_text}\n请只输出采集材料能支撑的产品分析结论。"
-            result = self.ask_llm_json(prompt, max_tokens=4096)
+            result = await self.ask_llm_json_async(prompt, max_tokens=4096)
             if result:
                 analysis = self._parse_product_analysis(result)
                 self._log(f"✅ 产品分析完成: {len(analysis.feature_matrix)}个功能维度, "

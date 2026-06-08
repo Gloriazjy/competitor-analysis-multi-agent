@@ -99,7 +99,8 @@ class LangGraphOrchestrator:
             quality_feedback=feedback,
         )
         state["timings"]["collection"] = time.time() - start
-        return {"competitors_data": result, **extra_updates}
+        competitors_list = list(result.values()) if isinstance(result, dict) else result
+        return {"competitors_data": competitors_list, **extra_updates}
 
     async def node_parallel_analysis(self, state: GraphState) -> dict:
         """节点：并行三维分析"""

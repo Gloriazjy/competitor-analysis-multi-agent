@@ -59,7 +59,7 @@ class StrategyAgent(BaseAgent):
                 product_name=product_name,
                 analysis_text=analysis_text,
             )
-            result = self.ask_llm_json(prompt, max_tokens=4096)
+            result = await self.ask_llm_json_async(prompt, max_tokens=4096)
             if result:
                 report = self._parse_strategy_report(product_name, competitor_count, result)
                 self._log(f"✅ 策略建议完成: {len(report.action_plan)}项行动方案")
