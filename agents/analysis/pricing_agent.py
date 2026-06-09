@@ -55,7 +55,7 @@ class PricingAgent(BaseAgent):
             feedback_text = self._format_feedback(quality_feedback or [])
             if feedback_text:
                 prompt += f"\n\n## 质检返工要求\n{feedback_text}\n请补齐定价对比项，并避免无依据的定价判断。"
-            result = await self.ask_llm_json_async(prompt, max_tokens=4096)
+            result = self.ask_llm_json(prompt, max_tokens=4096)
             if result:
                 analysis = self._parse_pricing_analysis(result)
                 self._log(f"✅ 定价分析完成: {len(analysis.pricing_comparison)}个竞品定价对比")
