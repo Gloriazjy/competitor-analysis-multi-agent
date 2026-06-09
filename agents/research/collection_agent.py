@@ -134,7 +134,7 @@ class CollectionAgent(BaseAgent):
             if feedback_text:
                 prompt += f"\n\n## 质检返工要求\n{feedback_text}\n请优先补齐上述缺口，避免再次输出无来源或空字段。"
             prompt += self._build_universal_extract_instruction(profile)
-            result = await self.ask_llm_json_async(prompt, max_tokens=4096)
+            result = self.ask_llm_json(prompt, max_tokens=4096)
             if result:
                 return CompetitorData(
                     name=competitor_name,

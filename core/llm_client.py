@@ -21,14 +21,10 @@ import config
 
 
 def _safe_error_text(text: str, limit: int = 300) -> str:
-    """限制错误文本长度，避免日志过长。脱敏所有 provider 的 API key。"""
+    """限制错误文本长度，避免日志过长。"""
     if not text:
         return ""
-    for key in (config.DOUBAO_API_KEY, config.ALI_API_KEY, config.OPENAI_API_KEY,
-                config.BAIDU_API_KEY, config.BAIDU_SECRET_KEY, config.BAIDU_SEARCH_API_KEY):
-        if key and key not in ("your_api_key", ""):
-            text = text.replace(key, "***")
-    return text[:limit]
+    return text.replace(config.DOUBAO_API_KEY, "***")[:limit]
 
 
 def _request_options() -> dict:
